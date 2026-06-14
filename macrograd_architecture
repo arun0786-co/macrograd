@@ -1,0 +1,66 @@
+digraph {
+	graph [rankdir=LR]
+	4344993808 [label="data 0.5889, -0.2264... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	4351842384 [label="data -0.6354, -1.0019... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4351842384_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
+	"4351842384_op" -> 4351842384
+	4341702160 -> "4351842384_op"
+	4344507968 -> "4351842384_op"
+	4345153744 [label="data 1.0000, -1.0000... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	4351836624 [label="data -0.0088, -0.7034... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4351836624_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
+	"4351836624_op" -> 4351836624
+	4351839568 -> "4351836624_op"
+	4351840080 -> "4351836624_op"
+	4351840720 [label="data 0.0325, 0.0000... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4351840720_op" [label=relu fillcolor=lightgrey shape=oval style=filled]
+	"4351840720_op" -> 4351840720
+	4351841232 -> "4351840720_op"
+	4351842768 [label="data 0.0000, -2.0011... | grad 0.0028, 0.0023..." fillcolor=white shape=record style=filled]
+	"4351842768_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
+	"4351842768_op" -> 4351842768
+	4344993808 -> "4351842768_op"
+	4351838160 -> "4351842768_op"
+	4351838800 [label="data 0.0000 | grad 1.0000" fillcolor=white shape=record style=filled]
+	"4351838800_op" [label=mse_loss fillcolor=lightgrey shape=oval style=filled]
+	"4351838800_op" -> 4351838800
+	4351839184 -> "4351838800_op"
+	4345153744 -> "4351838800_op"
+	4344396560 [label="data 0.6679, -0.2775... | grad -0.0015, 0.0000..." fillcolor=white shape=record style=filled]
+	4351839056 [label="data 1.0056, 1.0056... | grad 0.0028, 0.0023..." fillcolor=white shape=record style=filled]
+	"4351839056_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
+	"4351839056_op" -> 4351839056
+	4341557168 -> "4351839056_op"
+	4351839184 [label="data 1.0056, -0.9955... | grad 0.0028, 0.0023..." fillcolor=white shape=record style=filled]
+	"4351839184_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
+	"4351839184_op" -> 4351839184
+	4351842768 -> "4351839184_op"
+	4351839056 -> "4351839184_op"
+	4351841232 [label="data 0.0325, -1.2795... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4351841232_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
+	"4351841232_op" -> 4351841232
+	4351841872 -> "4351841232_op"
+	4351842384 -> "4351841232_op"
+	4351839568 [label="data 0.0000, -0.7062... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4351839568_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
+	"4351839568_op" -> 4351839568
+	4344993504 -> "4351839568_op"
+	4341702160 [label="data 2.0000, 3.0000... | grad 0.0242, 0.0108..." fillcolor=white shape=record style=filled]
+	4344507968 [label="data 0.3626, -0.1364... | grad -0.0056, 0.0000..." fillcolor=white shape=record style=filled]
+	4351841872 [label="data 0.6680, -0.2775... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4351841872_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
+	"4351841872_op" -> 4351841872
+	4344396560 -> "4351841872_op"
+	4344397520 [label="data -0.2710, 0.0859... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	4344993504 [label="data 0.0000, -0.7062... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	4351840080 [label="data -0.0088, 0.0028... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4351840080_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
+	"4351840080_op" -> 4351840080
+	4344397520 -> "4351840080_op"
+	4351840720 -> "4351840080_op"
+	4341557168 [label="data 1.0052 | grad 0.0073" fillcolor=white shape=record style=filled]
+	4351838160 [label="data 0.0000, 0.0000... | grad 0.0016, -0.0006..." fillcolor=white shape=record style=filled]
+	"4351838160_op" [label=relu fillcolor=lightgrey shape=oval style=filled]
+	"4351838160_op" -> 4351838160
+	4351836624 -> "4351838160_op"
+}
