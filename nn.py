@@ -2,6 +2,9 @@ import random
 from engine import tensor
 
 class module:
+    def __init__(self):
+        self.training = True
+
     def zero_grad(self):
         for p in self.parameters():
             for i in range(len(p.data)):
@@ -9,6 +12,26 @@ class module:
 
     def parameters(self):
         return []
+    
+    def train(self):
+        self.training = True
+        for v in vars(self).values():
+            if isinstance(v, module):
+                v.train()
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, module):
+                        item.train()
+    
+    def eval(self):
+        self.training = False
+        for v in vars(self).values():
+            if isinstance(v, module):
+                v.eval()
+            elif isinstance(v, list):
+                for item in v:
+                    if isinstance(item, module):
+                        item.eval()
     
 '''class neuron(module):
     def __init__(self, nin):
@@ -29,6 +52,7 @@ class linear(module):
     def __init__(self, nin, nout):
         # nout no of op features ,
         # nin no of  ip features ,
+        super().__init__()
         w_data = [[random.uniform(-1,1) for _ in range(nout)] for _ in range(nin)]
         self.w = tensor(w_data)
 
@@ -47,18 +71,44 @@ class linear(module):
 
 
 class MLP(module):
-    def __init__(self, layer_sizes):
-        
+    def __init__(self, layer_sizes, activation_fns=None, dropout_p=None):
+        super().__init__()
         self.layers = []
+        self.dropouts = []
+        
+        num_hidden = len(layer_sizes) - 2
+        
+        if activation_fns is None:
+            self.activation_fns = [lambda x: x.relu()] * num_hidden + [None]
+        else:
+            self.activation_fns = activation_fns
+        
+        if dropout_p is None:
+            self.dropout_ps = [0.0] * num_hidden
+        else:
+            self.dropout_ps = dropout_p if isinstance(dropout_p, list) else [dropout_p] * num_hidden
+        
         for i in range(len(layer_sizes)-1):
-            self.layers.append(linear(layer_sizes[i], layer_sizes[i+1   ]))
+            self.layers.append(linear(layer_sizes[i], layer_sizes[i+1]))
+            if i < num_hidden and self.dropout_ps[i] > 0:
+                self.dropouts.append((i, dropout(p=self.dropout_ps[i])))
 
     def __call__(self,x):
         out = x
+        dropout_idx = 0
+        
         for i, layer in enumerate(self.layers):
             out = layer(out)
+            
             if i < len(self.layers) - 1:
-                out = out.relu()
+                act_fn = self.activation_fns[i]
+                if act_fn:
+                    out = act_fn(out)
+                
+                if dropout_idx < len(self.dropouts) and self.dropouts[dropout_idx][0] == i:
+                    out = self.dropouts[dropout_idx][1](out)
+                    dropout_idx += 1
+        
         return out
 
     def parameters(self):
@@ -71,3 +121,24 @@ class MLP(module):
         lines = [f"  ({i}): {layer}" for i, layer in enumerate(self.layers)]
         return "MLP(\n" + "\n".join(lines) + "\n)"
     
+
+class dropout(module):
+    def __init__(self, p=0.5):
+        super().__init__()
+        self.p = p
+
+    def __call__(self, x):
+        if not self.training:
+            return x
+        scale = 1.0 / (1.0 - self.p)
+        mask_data = [scale if random.random() > self.p else 0.0 for _ in range(len(x.data))]
+
+        mask = tensor(mask_data, shape=x.shape, op='dropout')
+        out = x * mask
+        return out
+    
+    def parameters(self):
+        return []
+    
+    def __repr__(self):
+        return f"Dropout(p={self.p})"
