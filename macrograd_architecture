@@ -1,66 +1,82 @@
 digraph {
 	graph [rankdir=LR]
-	4344993808 [label="data 0.5889, -0.2264... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	4351842384 [label="data -0.6354, -1.0019... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	"4351842384_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
-	"4351842384_op" -> 4351842384
-	4341702160 -> "4351842384_op"
-	4344507968 -> "4351842384_op"
-	4345153744 [label="data 1.0000, -1.0000... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	4351836624 [label="data -0.0088, -0.7034... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	"4351836624_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
-	"4351836624_op" -> 4351836624
-	4351839568 -> "4351836624_op"
-	4351840080 -> "4351836624_op"
-	4351840720 [label="data 0.0325, 0.0000... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	"4351840720_op" [label=relu fillcolor=lightgrey shape=oval style=filled]
-	"4351840720_op" -> 4351840720
-	4351841232 -> "4351840720_op"
-	4351842768 [label="data 0.0000, -2.0011... | grad 0.0028, 0.0023..." fillcolor=white shape=record style=filled]
-	"4351842768_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
-	"4351842768_op" -> 4351842768
-	4344993808 -> "4351842768_op"
-	4351838160 -> "4351842768_op"
-	4351838800 [label="data 0.0000 | grad 1.0000" fillcolor=white shape=record style=filled]
-	"4351838800_op" [label=mse_loss fillcolor=lightgrey shape=oval style=filled]
-	"4351838800_op" -> 4351838800
-	4351839184 -> "4351838800_op"
-	4345153744 -> "4351838800_op"
-	4344396560 [label="data 0.6679, -0.2775... | grad -0.0015, 0.0000..." fillcolor=white shape=record style=filled]
-	4351839056 [label="data 1.0056, 1.0056... | grad 0.0028, 0.0023..." fillcolor=white shape=record style=filled]
-	"4351839056_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
-	"4351839056_op" -> 4351839056
-	4341557168 -> "4351839056_op"
-	4351839184 [label="data 1.0056, -0.9955... | grad 0.0028, 0.0023..." fillcolor=white shape=record style=filled]
-	"4351839184_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
-	"4351839184_op" -> 4351839184
-	4351842768 -> "4351839184_op"
-	4351839056 -> "4351839184_op"
-	4351841232 [label="data 0.0325, -1.2795... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	"4351841232_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
-	"4351841232_op" -> 4351841232
-	4351841872 -> "4351841232_op"
-	4351842384 -> "4351841232_op"
-	4351839568 [label="data 0.0000, -0.7062... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	"4351839568_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
-	"4351839568_op" -> 4351839568
-	4344993504 -> "4351839568_op"
-	4341702160 [label="data 2.0000, 3.0000... | grad 0.0242, 0.0108..." fillcolor=white shape=record style=filled]
-	4344507968 [label="data 0.3626, -0.1364... | grad -0.0056, 0.0000..." fillcolor=white shape=record style=filled]
-	4351841872 [label="data 0.6680, -0.2775... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	"4351841872_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
-	"4351841872_op" -> 4351841872
-	4344396560 -> "4351841872_op"
-	4344397520 [label="data -0.2710, 0.0859... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	4344993504 [label="data 0.0000, -0.7062... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	4351840080 [label="data -0.0088, 0.0028... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
-	"4351840080_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
-	"4351840080_op" -> 4351840080
-	4344397520 -> "4351840080_op"
-	4351840720 -> "4351840080_op"
-	4341557168 [label="data 1.0052 | grad 0.0073" fillcolor=white shape=record style=filled]
-	4351838160 [label="data 0.0000, 0.0000... | grad 0.0016, -0.0006..." fillcolor=white shape=record style=filled]
-	"4351838160_op" [label=relu fillcolor=lightgrey shape=oval style=filled]
-	"4351838160_op" -> 4351838160
-	4351836624 -> "4351838160_op"
+	4371849168 [label="data -0.0292 | grad 0.5172" fillcolor=white shape=record style=filled]
+	4376985680 [label="data -0.6588, -0.2730... | grad -0.0014, 0.3572..." fillcolor=white shape=record style=filled]
+	4378271952 [label="data 4.1930, -1.8617... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4378271952_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
+	"4378271952_op" -> 4378271952
+	4378272592 -> "4378271952_op"
+	4378273104 -> "4378271952_op"
+	4378270032 [label="data 0.0000, 0.0000... | grad 0.0018, -0.0546..." fillcolor=white shape=record style=filled]
+	"4378270032_op" [label="*" fillcolor=lightgrey shape=oval style=filled]
+	"4378270032_op" -> 4378270032
+	4378270800 -> "4378270032_op"
+	4378271440 -> "4378270032_op"
+	4376877520 [label="data -0.0235, -0.0235... | grad 0.1357, 0.0774..." fillcolor=white shape=record style=filled]
+	"4376877520_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
+	"4376877520_op" -> 4376877520
+	4371849168 -> "4376877520_op"
+	4376629792 [label="data -0.2101, 0.0156... | grad -0.0012, 0.3071..." fillcolor=white shape=record style=filled]
+	4378270288 [label="data -0.4543, 1.4952... | grad -0.0003, 0.0806..." fillcolor=white shape=record style=filled]
+	"4378270288_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
+	"4378270288_op" -> 4378270288
+	4376985680 -> "4378270288_op"
+	4378270032 -> "4378270288_op"
+	4376630096 [label="data -0.2071, 0.5228... | grad -0.0076, 0.4828..." fillcolor=white shape=record style=filled]
+	4378268496 [label="data -0.6646, 1.5329... | grad -0.0003, 0.0806..." fillcolor=white shape=record style=filled]
+	"4378268496_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
+	"4378268496_op" -> 4378268496
+	4378269136 -> "4378268496_op"
+	4378270288 -> "4378268496_op"
+	4378272592 [label="data -0.3775, -0.3199... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4378272592_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
+	"4378272592_op" -> 4378272592
+	4376001616 -> "4378272592_op"
+	4376878160 [label="data 0.0817 | grad 1.0000" fillcolor=white shape=record style=filled]
+	"4376878160_op" [label=mse_loss fillcolor=lightgrey shape=oval style=filled]
+	"4376878160_op" -> 4376878160
+	4376774320 -> "4376878160_op"
+	4376879056 -> "4376878160_op"
+	4378270800 [label="data 0.0000, 1.2500... | grad 0.0077, 0.0000..." fillcolor=white shape=record style=filled]
+	"4378270800_op" [label=dropout fillcolor=lightgrey shape=oval style=filled]
+	"4378270800_op" -> 4378270800
+	4376001616 [label="data -0.3786, -0.3199... | grad 0.0038, 0.0000..." fillcolor=white shape=record style=filled]
+	4376128752 [label="data 0.3856, -1.3492... | grad 0.0038, 0.0000..." fillcolor=white shape=record style=filled]
+	4376880464 [label="data -0.0074, 1.7033... | grad -0.0282, 0.0725..." fillcolor=white shape=record style=filled]
+	"4376880464_op" [label="*" fillcolor=lightgrey shape=oval style=filled]
+	"4376880464_op" -> 4376880464
+	4376882512 -> "4376880464_op"
+	4376878672 -> "4376880464_op"
+	4376882512 [label="data 1.1111, 1.1111... | grad 0.0002, 0.1112..." fillcolor=white shape=record style=filled]
+	"4376882512_op" [label=dropout fillcolor=lightgrey shape=oval style=filled]
+	"4376882512_op" -> 4376882512
+	4378273104 [label="data 4.5704, -1.5418... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	"4378273104_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
+	"4378273104_op" -> 4378273104
+	4371469712 -> "4378273104_op"
+	4376128752 -> "4378273104_op"
+	4371469712 [label="data 2.0000, 3.0000... | grad 0.3813, 1.3813..." fillcolor=white shape=record style=filled]
+	4378269136 [label="data -0.2104, 0.0377... | grad -0.0003, 0.0806..." fillcolor=white shape=record style=filled]
+	"4378269136_op" [label=expand fillcolor=lightgrey shape=oval style=filled]
+	"4378269136_op" -> 4378269136
+	4376629792 -> "4378269136_op"
+	4376878672 [label="data -0.0066, 1.5329... | grad -0.0314, 0.0806..." fillcolor=white shape=record style=filled]
+	"4376878672_op" [label=leaky_relu fillcolor=lightgrey shape=oval style=filled]
+	"4376878672_op" -> 4376878672
+	4378268496 -> "4376878672_op"
+	4376774320 [label="data 1.0000, -1.0000... | grad 0.0000, 0.0000..." fillcolor=white shape=record style=filled]
+	4378273488 [label="data 1.2949, -0.8216... | grad 0.1357, 0.0774..." fillcolor=white shape=record style=filled]
+	"4378273488_op" [label="@" fillcolor=lightgrey shape=oval style=filled]
+	"4378273488_op" -> 4378273488
+	4376630096 -> "4378273488_op"
+	4376880464 -> "4378273488_op"
+	4378271440 [label="data 4.1930, 0.0000... | grad 0.0000, -0.0682..." fillcolor=white shape=record style=filled]
+	"4378271440_op" [label=relu fillcolor=lightgrey shape=oval style=filled]
+	"4378271440_op" -> 4378271440
+	4378271952 -> "4378271440_op"
+	4376879056 [label="data 1.2714, -0.8451... | grad 0.1357, 0.0774..." fillcolor=white shape=record style=filled]
+	"4376879056_op" [label="+" fillcolor=lightgrey shape=oval style=filled]
+	"4376879056_op" -> 4376879056
+	4378273488 -> "4376879056_op"
+	4376877520 -> "4376879056_op"
 }

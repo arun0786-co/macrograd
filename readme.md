@@ -31,6 +31,8 @@ Macrograd goes further:
 
 * `Module`, `Linear`, `MLP` classes.
 * All layers vectorized; weights stored as matrices.
+* Per-layer activation functions (pass callables) and dropout rates.
+* Dropout layer with `.train()` and `.eval()` modes for training vs. inference.
 
 **The Optimizers (`optim`)**
 
@@ -40,6 +42,37 @@ Macrograd goes further:
 ## 🚀 Quick Start
 
 See [train.py](train.py) for a full example (3→4→4→1 network, 100 epochs, loss tracking).
+
+### Per-Layer Activations and Dropout
+
+```python
+# Define activations for each hidden layer (last layer has None)
+activations = [
+    lambda x: x.relu(),
+    lambda x: x.leaky_relu(alpha=0.01)
+]
+
+# Define dropout rates for each hidden layer
+dropout_rates = [0.2, 0.1]
+
+# Create model with custom activation functions and dropout per layer
+model = MLP([3, 4, 4, 1], activation_fns=activations, dropout_p=dropout_rates)
+
+# Training mode (dropout enabled)
+model.train()
+for epoch in range(epochs):
+    y_pred = model(X)
+    loss = y_pred.mse_loss(Y)
+    # ... backward & optimizer step
+
+# Evaluation mode (dropout disabled)
+model.eval()
+y_pred = model(X)
+```
+
+**Default behavior:**
+- All hidden layers use `relu` if `activation_fns=None`
+- No dropout if `dropout_p=None`
 
 ## 🧠 Graph Visualization
 
