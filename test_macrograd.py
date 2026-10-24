@@ -203,6 +203,14 @@ def test_tensor_input_checks():
     assert tensor([1.0, 2.0], shape=[2]).shape == (2,)
 
 
+def test_std_of_constant_has_zero_grad():
+    x = tensor([2.0, 2.0, 2.0])
+    out = x.std()
+    out.backward()
+    assert out.data == [0.0]
+    assert x.grad == [0.0, 0.0, 0.0]
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

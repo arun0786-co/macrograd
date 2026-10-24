@@ -473,7 +473,21 @@ class tensor:
         return ((self - m) ** 2).mean()
     
     def std(self):
-        return self.var() ** 0.5
+        # own op so a constant tensor gets gradient 0 (std is at its minimum there)
+        # instead of hitting 0 ** -0.5 in pow's backward
+        n = len(self.data)
+        m = sum(self.data) / n
+        s = (sum((v - m) ** 2 for v in self.data) / n) ** 0.5
+        out = tensor([s], shape=(), children=(self,), op='std')
+
+        def _backward():
+            if s == 0.0:
+                return
+            for i in range(n):
+                self.grad[i] += (self.data[i] - m) / (n * s) * out.grad[0]
+
+        out._backward = _backward
+        return out
     
     def softmax(self):
         # over the last dimension, so each row of a (B, C) batch sums to 1
