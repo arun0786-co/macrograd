@@ -120,6 +120,13 @@ def test_eval_turns_off_dropout():
     assert len(outputs) > 1
 
 
+def test_matmul_operator():
+    a = tensor([[1.0, 2.0], [3.0, 4.0]])
+    b = tensor([[5.0], [6.0]])
+    assert (a @ b).data == [17.0, 39.0]
+    assert (a @ b).shape == (2, 1)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

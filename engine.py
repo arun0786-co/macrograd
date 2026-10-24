@@ -215,6 +215,9 @@ class tensor:
         out._backward = _backward
         return out
 
+    def __matmul__(self, other):
+        return self.matmul(other)
+
     def backward(self):
         topo= []
         visited = set()
