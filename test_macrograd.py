@@ -127,6 +127,17 @@ def test_matmul_operator():
     assert (a @ b).shape == (2, 1)
 
 
+def test_broadcast_either_side():
+    m = tensor([[1.0, 2.0], [3.0, 4.0]])
+    assert (tensor(2.0) + m).data == (m + tensor(2.0)).data == [3.0, 4.0, 5.0, 6.0]
+    assert (tensor([[10.0, 20.0]]) * m).data == [10.0, 40.0, 30.0, 80.0]
+
+    s = tensor(3.0)
+    row = tensor([[1.0, -2.0]])
+    x = tensor([[0.5, 1.0], [-1.0, 2.0]])
+    gradcheck(lambda a, b, c: ((a + c) * (b * c)).sum(), s, row, x)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

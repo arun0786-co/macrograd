@@ -94,8 +94,12 @@ class tensor:
         if isinstance(other, (int, float)):
             other = tensor([other] * len(self.data), shape=self.shape)
         if isinstance(other, tensor) and self.shape != other.shape:
-            other = other.expand(self.shape)
-        
+            # expand whichever side is smaller
+            if len(other.data) < len(self.data):
+                other = other.expand(self.shape)
+            else:
+                return self.expand(other.shape) + other
+
         if self.shape != other.shape:
             raise ValueError(f"Shape mismatch: {self.shape} + {other.shape}")
 
@@ -118,7 +122,10 @@ class tensor:
         if isinstance(other, (int,float)):
             other = tensor([other] * len(self.data),shape=self.shape)
         if isinstance(other, tensor) and self.shape != other.shape:
-            other = other.expand(self.shape)
+            if len(other.data) < len(self.data):
+                other = other.expand(self.shape)
+            else:
+                return self.expand(other.shape) * other
 
         if self.shape != other.shape:
             raise ValueError(f"Shape mismatch: {self.shape} * {other.shape}")
