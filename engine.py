@@ -17,13 +17,28 @@ class tensor:
 
     @staticmethod
     def _taylor_exp(x, terms=15):
+        # the series is only accurate near 0, so use exp(-x) = 1/exp(x)
+        # and exp(x) = exp(x/2)^2 to bring x into [0, 0.5] first
+        if x < 0:
+            return 1.0 / tensor._taylor_exp(-x, terms)
+        if x > 710.0:
+            return float('inf')
+
+        halvings = 0
+        while x > 0.5:
+            x /= 2.0
+            halvings += 1
+
         result = 1.0
         current_term = 1.0
-        
+
         for i in range(1, terms):
             current_term *= (x / i)
             result += current_term
-            
+
+        for _ in range(halvings):
+            result *= result
+
         return result
 
     def exp(self):
