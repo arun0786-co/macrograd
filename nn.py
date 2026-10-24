@@ -1,5 +1,9 @@
 import random 
-from engine import tensor
+try:
+    from .engine import tensor
+except ImportError:
+    # run as a script from this folder, not imported as a package
+    from engine import tensor
 
 class module:
     def __init__(self):
