@@ -320,6 +320,8 @@ class tensor:
     def __pow__(self, other):
         if not isinstance(other, (int, float)):
             raise ValueError("Only supporting int/float powers for now")
+        if not float(other).is_integer() and any(v < 0 for v in self.data):
+            raise ValueError(f"Negative base with power {other} gives a complex number")
         out_data = [0.0] * len(self.data)
         for i in range(len(self.data)):
             out_data[i] = self.data[i] ** other
@@ -343,7 +345,7 @@ class tensor:
     @staticmethod
     def _taylor_log(x, terms=30):
         if x <= 0:
-            return -1e9
+            raise ValueError(f"log is undefined for {x}")
         if x == float('inf'):
             return x
 

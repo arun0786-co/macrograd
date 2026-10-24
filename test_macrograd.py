@@ -138,6 +138,17 @@ def test_broadcast_either_side():
     gradcheck(lambda a, b, c: ((a + c) * (b * c)).sum(), s, row, x)
 
 
+def test_invalid_log_and_pow_inputs_raise():
+    for bad in [lambda: tensor([-1.0]).log(), lambda: tensor([-4.0]) ** 0.5]:
+        try:
+            bad()
+        except ValueError:
+            continue
+        raise AssertionError("expected ValueError")
+    assert (tensor([-2.0]) ** 3).data == [-8.0]
+    assert close(tensor([0.0]).log().data[0], math.log(1e-8))
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:
