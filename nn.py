@@ -93,6 +93,12 @@ class MLP(module):
             self.dropout_ps = [0.0] * num_hidden
         else:
             self.dropout_ps = dropout_p if isinstance(dropout_p, list) else [dropout_p] * num_hidden
+
+        # one activation per hidden layer, plus an optional last one for the output layer
+        if len(self.activation_fns) not in (num_hidden, num_hidden + 1):
+            raise ValueError(f"Expected {num_hidden} or {num_hidden + 1} activation_fns, got {len(self.activation_fns)}")
+        if len(self.dropout_ps) != num_hidden:
+            raise ValueError(f"Expected {num_hidden} dropout rates (one per hidden layer), got {len(self.dropout_ps)}")
         
         for i in range(len(layer_sizes)-1):
             self.layers.append(linear(layer_sizes[i], layer_sizes[i+1]))
@@ -134,6 +140,8 @@ class MLP(module):
 class dropout(module):
     def __init__(self, p=0.5):
         super().__init__()
+        if not 0 <= p < 1:
+            raise ValueError(f"dropout p must be in [0, 1), got {p}")
         self.p = p
 
     def __call__(self, x):
