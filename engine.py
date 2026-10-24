@@ -374,15 +374,40 @@ class tensor:
         out._backward = _backward
         return out
     
+    # both helpers only ever call exp on a non-positive number, so nothing overflows
+    @staticmethod
+    def _sigmoid(x):
+        if x >= 0:
+            return 1.0 / (1.0 + tensor._taylor_exp(-x))
+        e = tensor._taylor_exp(x)
+        return e / (1.0 + e)
+
+    @staticmethod
+    def _tanh(x):
+        e = tensor._taylor_exp(-2.0 * abs(x))
+        t = (1.0 - e) / (1.0 + e)
+        return t if x >= 0 else -t
+
     def sigmoid(self):
-        return ((self * -1.0).exp() + 1.0) ** -1.0
-    
+        out_data = [0.0] * len(self.data)
+        for i in range(len(self.data)):
+            out_data[i] = self._sigmoid(self.data[i])
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='sigmoid')
+
+        def _backward():
+            for i in range(len(self.data)):
+                s = out.data[i]
+                self.grad[i] += s * (1.0 - s) * out.grad[i]
+
+        out._backward = _backward
+        return out
+
     def tanh(self):
         out_data = [0.0] * len(self.data)
         for i in range(len(self.data)):
-            e2x = self._taylor_exp(2.0 * self.data[i])
-            out_data[i] = (e2x - 1.0) / (e2x + 1.0)
-            
+            out_data[i] = self._tanh(self.data[i])
+
         out = tensor(out_data, shape=self.shape, children=(self,), op='tanh')
 
         def _backward():
