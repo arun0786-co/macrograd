@@ -11,6 +11,8 @@ def close(a, b, rel=1e-9, abs_tol=1e-12):
 
 def gradcheck(f, *inputs, eps=1e-6, tol=1e-6):
     # compare backward() against central finite differences
+    for x in inputs:
+        x.grad = [0.0] * len(x.data)
     f(*inputs).backward()
     for x in inputs:
         for i in range(len(x.data)):
@@ -40,6 +42,29 @@ def test_exp_matches_math():
 def test_log_matches_math():
     for x in [1e-300, 1e-8, 1e-4, 0.01, 0.5, 1.0, 2.0, 100.0, 1e4, 1e300]:
         assert close(tensor._taylor_log(x), math.log(x)), x
+
+
+def rand_tensor(rows, cols):
+    return tensor([[random.uniform(-1, 1) for _ in range(cols)] for _ in range(rows)])
+
+
+def test_core_op_grads():
+    random.seed(1)
+    x, w, b, y = rand_tensor(4, 3), rand_tensor(3, 2), rand_tensor(1, 2), rand_tensor(4, 2)
+    gradcheck(lambda x, w, b: (x @ w + b).mse_loss(y), x, w, b)
+
+    a = rand_tensor(3, 3)
+    gradcheck(lambda a: ((a.relu() + a.leaky_relu()) ** 2).mean(), a)
+    gradcheck(lambda a: (a * a + a).sum(), a)
+    gradcheck(lambda a: (a.exp() + (a * a + 1.0).log()).sum(), a)
+    gradcheck(lambda a: a.std() + (a / (a * a + 1.0)).sum(), a)
+
+
+def test_mlp_grads():
+    random.seed(2)
+    model = MLP([3, 4, 4, 1], activation_fns=[lambda x: x.tanh(), lambda x: x.gelu()])
+    x, y = rand_tensor(4, 3), rand_tensor(4, 1)
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
 
 
 def test_sigmoid_and_tanh_values():
