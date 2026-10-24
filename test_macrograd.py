@@ -80,6 +80,32 @@ def test_softmax_per_row():
     gradcheck(lambda a: (a.softmax() * weights).sum(), x)
 
 
+def ref_cross_entropy(logits, targets):
+    total = 0.0
+    for row, t in zip(logits, targets):
+        m = max(row)
+        log_sum_exp = m + math.log(sum(math.exp(v - m) for v in row))
+        total -= sum(tj * (v - log_sum_exp) for v, tj in zip(row, t))
+    return total / len(logits)
+
+
+def test_cross_entropy_values():
+    # confidently wrong prediction
+    loss = tensor([0.0, 12.0]).cross_entropy_loss(tensor([1.0, 0.0])).data[0]
+    assert close(loss, ref_cross_entropy([[0.0, 12.0]], [[1.0, 0.0]]))
+
+    logits = [[5.0, 0.0], [5.0, 0.0], [-2.0, 40.0]]
+    targets = [[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]]
+    loss = tensor(logits).cross_entropy_loss(tensor(targets)).data[0]
+    assert close(loss, ref_cross_entropy(logits, targets))
+
+
+def test_cross_entropy_grads():
+    targets = tensor([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+    x = tensor([[0.3, -0.2, 0.5], [2.0, 0.1, -1.0]])
+    gradcheck(lambda a: a.cross_entropy_loss(targets), x)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

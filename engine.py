@@ -502,26 +502,30 @@ class tensor:
         if self.shape != target.shape:
             raise ValueError(f"Shape mismatch in cross_entropy_loss: {self.shape} vs {target.shape}")
         
-        max_val = max(self.data)
-        exp_vals = [self._taylor_exp(self.data[i] - max_val) for i in range(len(self.data))]
-        sum_exp = sum(exp_vals)
-        softmax_vals = [e / sum_exp for e in exp_vals]
-        
+        # softmax over the last dimension, loss averaged over rows.
+        # each target row should be one-hot or sum to 1
+        C = self.shape[-1] if self.shape else 1
+        rows = len(self.data) // C
+        softmax_vals = [0.0] * len(self.data)
+
         loss_val = 0.0
-        for i in range(len(self.data)):
-            if softmax_vals[i] > 0:
-                loss_val -= target.data[i] * self._taylor_log(softmax_vals[i] + 1e-8)
-        
-        out = tensor([loss_val], shape=(), children=(self, target), op='cross_entropy')
-        
-        def _backward():
-            max_val = max(self.data)
-            exp_vals = [self._taylor_exp(self.data[i] - max_val) for i in range(len(self.data))]
+        for start in range(0, len(self.data), C):
+            row = self.data[start:start + C]
+            max_val = max(row)
+            exp_vals = [self._taylor_exp(v - max_val) for v in row]
             sum_exp = sum(exp_vals)
-            softmax_vals = [e / sum_exp for e in exp_vals]
-            
+            log_sum_exp = self._taylor_log(sum_exp)
+            for j in range(C):
+                softmax_vals[start + j] = exp_vals[j] / sum_exp
+                # log softmax = x - max - log(sum(exp(x - max)))
+                loss_val -= target.data[start + j] * (row[j] - max_val - log_sum_exp)
+        loss_val /= rows
+
+        out = tensor([loss_val], shape=(), children=(self, target), op='cross_entropy')
+
+        def _backward():
             for i in range(len(self.data)):
-                grad_contrib = (softmax_vals[i] - target.data[i]) * out.grad[0]
+                grad_contrib = (softmax_vals[i] - target.data[i]) / rows * out.grad[0]
                 self.grad[i] += grad_contrib
         
         out._backward = _backward
