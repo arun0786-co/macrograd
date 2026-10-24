@@ -211,6 +211,15 @@ def test_std_of_constant_has_zero_grad():
     assert x.grad == [0.0, 0.0, 0.0]
 
 
+def test_backward_on_deep_graph():
+    x = tensor([1.0])
+    y = x
+    for _ in range(5000):
+        y = y * 1.0 + 0.0
+    y.backward()
+    assert x.grad == [1.0]
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

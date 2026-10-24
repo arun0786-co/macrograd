@@ -234,15 +234,20 @@ class tensor:
         return self.matmul(other)
 
     def backward(self):
-        topo= []
+        # iterative post-order walk, so deep graphs don't hit python's recursion limit
+        topo = []
         visited = set()
-        def build_topo(node):
-            if node not in visited:
-                visited.add(node)
-                for child in node._prev:
-                    build_topo(child)
+        stack = [(self, False)]
+        while stack:
+            node, children_done = stack.pop()
+            if children_done:
                 topo.append(node)
-        build_topo(self)
+            elif node not in visited:
+                visited.add(node)
+                stack.append((node, True))
+                for child in node._prev:
+                    if child not in visited:
+                        stack.append((child, False))
         self.grad = [1.0] * len(self.data)
         for node in reversed(topo):
             node._backward()

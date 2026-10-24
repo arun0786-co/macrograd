@@ -1,14 +1,16 @@
 from graphviz import Digraph
 
 def trace(root):
+    # iterative walk, so deep graphs don't hit python's recursion limit
     nodes, edges = set(), set()
-    def build(v):
+    stack = [root]
+    while stack:
+        v = stack.pop()
         if v not in nodes:
             nodes.add(v)
             for child in v._prev:
                 edges.add((child, v))
-                build(child)
-    build(root)
+                stack.append(child)
     return nodes, edges
 
 def draw_dot(root):
