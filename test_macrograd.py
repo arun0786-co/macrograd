@@ -66,6 +66,20 @@ def test_gelu():
     gradcheck(lambda a: a.gelu().sum(), tensor([-3.0, -1.0, -0.2, 0.0, 0.4, 1.5, 3.0]))
 
 
+def test_softmax_per_row():
+    logits = [[1.0, 2.0, 3.0], [1000.0, 0.0, -1000.0]]
+    out = tensor(logits).softmax()
+    for r, row in enumerate(logits):
+        m = max(row)
+        denom = sum(math.exp(v - m) for v in row)
+        for j, v in enumerate(row):
+            assert close(out.data[r * 3 + j], math.exp(v - m) / denom), (r, j)
+
+    weights = tensor([[0.3, -1.0, 2.0], [1.5, 0.2, -0.7]])
+    x = tensor([[0.5, -0.3, 0.1], [2.0, 1.0, -1.0]])
+    gradcheck(lambda a: (a.softmax() * weights).sum(), x)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

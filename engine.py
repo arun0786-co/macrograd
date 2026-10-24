@@ -454,8 +454,30 @@ class tensor:
         return self.var() ** 0.5
     
     def softmax(self):
-        exponents = self.exp()
-        return exponents / exponents.sum()
+        # over the last dimension, so each row of a (B, C) batch sums to 1
+        C = self.shape[-1] if self.shape else 1
+        out_data = [0.0] * len(self.data)
+        for start in range(0, len(self.data), C):
+            row = self.data[start:start + C]
+            max_val = max(row)
+            exp_vals = [self._taylor_exp(v - max_val) for v in row]
+            sum_exp = sum(exp_vals)
+            for j in range(C):
+                out_data[start + j] = exp_vals[j] / sum_exp
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='softmax')
+
+        def _backward():
+            for start in range(0, len(self.data), C):
+                dot = 0.0
+                for j in range(C):
+                    dot += out.data[start + j] * out.grad[start + j]
+                for j in range(C):
+                    s = out.data[start + j]
+                    self.grad[start + j] += s * (out.grad[start + j] - dot)
+
+        out._backward = _backward
+        return out
     
     def mse_loss(self, target):
         if self.shape != target.shape:
