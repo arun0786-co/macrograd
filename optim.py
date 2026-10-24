@@ -1,7 +1,16 @@
-class SGD:
+class optimizer:
+    def __init__(self, parameters, lr):
+        self.parameters = list(parameters)
+        self.lr = lr
+
+    def zero_grad(self):
+        for p in self.parameters:
+            for i in range(len(p.data)):
+                p.grad[i] = 0.0
+
+class SGD(optimizer):
     def __init__(self, parameters, lr=0.01):
-        self.parameters = parameters
-        self.lr = lr 
+        super().__init__(parameters, lr)
 
     def step(self):
         for p in self.parameters:
@@ -9,10 +18,9 @@ class SGD:
               
                 p.data[i] -= self.lr * p.grad[i]
 
-class Adam:
+class Adam(optimizer):
     def __init__(self, parameters, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
-        self.parameters = parameters
-        self.lr = lr
+        super().__init__(parameters, lr)
         self.b1 = beta1
         self.b2 = beta2
         self.eps = eps
@@ -21,11 +29,6 @@ class Adam:
        
         self.m = [[0.0] * len(p.data) for p in self.parameters]
         self.v = [[0.0] * len(p.data) for p in self.parameters]
-
-    def zero_grad(self):
-        for p in self.parameters:
-            for i in range(len(p.data)):
-                p.grad[i] = 0.0
 
     def step(self):
         self.t += 1

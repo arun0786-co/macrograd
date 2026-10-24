@@ -3,6 +3,7 @@ import random
 
 from engine import tensor
 from nn import MLP, dropout, linear
+from optim import SGD
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -218,6 +219,22 @@ def test_backward_on_deep_graph():
         y = y * 1.0 + 0.0
     y.backward()
     assert x.grad == [1.0]
+
+
+def test_sgd_training_step():
+    random.seed(3)
+    model = MLP([2, 3, 1])
+    opt = SGD(model.parameters(), lr=0.1)
+    x, y = tensor([[1.0, 2.0]]), tensor([[0.5]])
+    losses = []
+    for _ in range(20):
+        loss = model(x).mse_loss(y)
+        opt.zero_grad()
+        assert all(g == 0.0 for p in model.parameters() for g in p.grad)
+        loss.backward()
+        opt.step()
+        losses.append(loss.data[0])
+    assert losses[-1] < losses[0]
 
 
 if __name__ == "__main__":
