@@ -333,18 +333,30 @@ class tensor:
     @staticmethod
     def _taylor_log(x, terms=30):
         if x <= 0:
-            return -1e9 
-            
+            return -1e9
+        if x == float('inf'):
+            return x
+
+        # the series converges fast only near 1, so scale x into [0.5, 2]
+        # and add back k * log(2)
+        k = 0
+        while x > 2.0:
+            x /= 2.0
+            k += 1
+        while x < 0.5:
+            x *= 2.0
+            k -= 1
+
         z = (x - 1.0) / (x + 1.0)
         z_squared = z * z
         numerator = z
         result = 0.0
-        
+
         for i in range(1, terms * 2, 2):
             result += numerator / i
             numerator *= z_squared
-            
-        return 2.0 * result
+
+        return 2.0 * result + k * 0.6931471805599453
 
     def log(self):
         
