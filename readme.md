@@ -3,7 +3,7 @@
 
 A lightweight, N-dimensional tensor autograd engine and neural network library built entirely from scratch—no numpy, no math library, just pure Python.
 
-Macrograd implements a dynamic computational graph (DAG) for backpropagation, similar to PyTorch. Fully vectorized to handle batched matrix ops and complex activations without external C backends.
+Macrograd implements a dynamic computational graph (DAG) for backpropagation, similar to PyTorch. Every op works on whole tensors (batched matmul, activations, losses), written as plain Python loops with no C backend.
 
 ## 🥊 Macrograd vs. Micrograd
 
@@ -13,8 +13,8 @@ Macrograd goes further:
 
 * **Tensors over Scalars:** Micrograd wraps individual numbers. Macrograd uses N-dimensional flat arrays with custom stride logic for real-world data.
 * **Batched Matmul:** Micrograd loops over neurons individually. Macrograd does `X @ W` in a single pass—entire layers at once.
-* **No External Math:** No `math` module, no numpy. Exponents and logs computed from Taylor Series approximations.
-* **Production Layers:** Direct `Linear` transformations (no `Neuron` abstraction), scales like PyTorch.
+* **No External Math:** No `math` module, no numpy. Exponents and logs computed from Taylor Series approximations, with range reduction so they stay accurate for large and small inputs.
+* **Layer-level modules:** each `linear` layer holds a full weight matrix (no `Neuron` abstraction), like PyTorch's `nn.Linear`.
 
 ## ⚙️ Features
 
@@ -23,14 +23,14 @@ Macrograd goes further:
 * N-dimensional flat arrays with stride-based indexing.
 * All ops: `+`, `-`, `*`, `/`, `**`, `@` (batched matmul).
 * Reductions: `.sum()`, `.mean()`, `.var()`, `.std()`.
-* Broadcasting via `.expand()` for scalars and bias rows.
-* Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu`.
-* Loss: `mse_loss`, `cross_entropy_loss` (single-node backprop).
+* Broadcasting via `.expand()` for scalars and bias rows, on either side of `+` and `*`.
+* Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` (per row).
+* Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop).
 
 **The Network (`nn`)**
 
-* `Module`, `Linear`, `MLP` classes.
-* All layers vectorized; weights stored as matrices.
+* `module`, `linear`, `MLP`, `dropout` classes.
+* Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
 * Per-layer activation functions (pass callables) and dropout rates.
 * Dropout layer with `.train()` and `.eval()` modes for training vs. inference.
 
@@ -42,6 +42,8 @@ Macrograd goes further:
 ## 🚀 Quick Start
 
 See [train.py](train.py) for a full example (3→4→4→1 network, 100 epochs, loss tracking).
+
+Run the tests with `python3 test_macrograd.py`. They compare forward values against Python's `math` module and check gradients against finite differences.
 
 **Default behavior:**
 
