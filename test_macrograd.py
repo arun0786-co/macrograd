@@ -26,6 +26,14 @@ def gradcheck(f, *inputs, eps=1e-6, tol=1e-6):
             assert abs(numeric - x.grad[i]) < tol, (i, numeric, x.grad[i])
 
 
+def raises(fn, error):
+    try:
+        fn()
+    except error:
+        return True
+    return False
+
+
 def ref_sigmoid(x):
     if x >= 0:
         return 1 / (1 + math.exp(-x))
@@ -178,14 +186,21 @@ def test_broadcast_either_side():
 
 
 def test_invalid_log_and_pow_inputs_raise():
-    for bad in [lambda: tensor([-1.0]).log(), lambda: tensor([-4.0]) ** 0.5]:
-        try:
-            bad()
-        except ValueError:
-            continue
-        raise AssertionError("expected ValueError")
+    assert raises(lambda: tensor([-1.0]).log(), ValueError)
+    assert raises(lambda: tensor([-4.0]) ** 0.5, ValueError)
     assert (tensor([-2.0]) ** 3).data == [-8.0]
     assert close(tensor([0.0]).log().data[0], math.log(1e-8))
+
+
+
+def test_tensor_input_checks():
+    m = tensor([[1.0, 2.0], [3.0, 4.0]])
+    assert raises(lambda: tensor([1.0, 2.0, 3.0], shape=(2, 2)), ValueError)
+    assert raises(lambda: tensor([1.0, [2.0, 3.0]]), ValueError)
+    assert raises(lambda: m.get_element(0, 3), IndexError)
+    assert raises(lambda: m.get_element(1), IndexError)
+    assert m.get_element(1, 0) == 3.0
+    assert tensor([1.0, 2.0], shape=[2]).shape == (2,)
 
 
 if __name__ == "__main__":

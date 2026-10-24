@@ -6,8 +6,14 @@ class tensor:
             self.shape = inferred_shape
         else:
             self.data = list(data)
-            self.shape = shape
-            
+            self.shape = tuple(shape)
+
+        size = 1
+        for dim in self.shape:
+            size *= dim
+        if size != len(self.data):
+            raise ValueError(f"{len(self.data)} values don't fit shape {self.shape}")
+
         self.grad = [0.0] * len(self.data)
         
         self.strides = self._compute_strides(self.shape)
@@ -81,6 +87,8 @@ class tensor:
             return flat_list, (len(data),) + inner_shape
             
         else:
+            if any(isinstance(v, (list, tuple)) for v in data):
+                raise ValueError("Irregular tensor shape! Got a list next to a number")
             return list(data), (len(data),)
 
 
@@ -250,6 +258,8 @@ class tensor:
         return tuple(strides)
         
     def get_element(self, *indices):
+        if len(indices) != len(self.shape) or any(not 0 <= i < d for i, d in zip(indices, self.shape)):
+            raise IndexError(f"Index {indices} out of range for shape {self.shape}")
         flat_index = sum(i * s for i, s in zip(indices, self.strides))
         return self.data[flat_index]
 
