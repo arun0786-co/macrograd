@@ -506,19 +506,22 @@ class tensor:
         return out
     
     def gelu(self):
+        # tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        k = 0.7978845608028654
         out_data = [0.0] * len(self.data)
         for i in range(len(self.data)):
             x = self.data[i]
-            cdf = 0.5 * (1.0 + self._taylor_exp(0.7978845608 * x) / (self._taylor_exp(0.7978845608 * x) + 1.0))
-            out_data[i] = x * cdf
-            
+            t = self._tanh(k * (x + 0.044715 * x * x * x))
+            out_data[i] = 0.5 * x * (1.0 + t)
+
         out = tensor(out_data, shape=self.shape, children=(self,), op='gelu')
 
         def _backward():
             for i in range(len(self.data)):
                 x = self.data[i]
-                cdf = 0.5 * (1.0 + self._taylor_exp(0.7978845608 * x) / (self._taylor_exp(0.7978845608 * x) + 1.0))
-                local_grad = cdf + x * 0.3989422804 * self._taylor_exp(0.7978845608 * x) / ((self._taylor_exp(0.7978845608 * x) + 1.0) ** 2)
+                t = self._tanh(k * (x + 0.044715 * x * x * x))
+                du_dx = k * (1.0 + 3 * 0.044715 * x * x)
+                local_grad = 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du_dx
                 self.grad[i] += local_grad * out.grad[i]
                 
         out._backward = _backward

@@ -56,6 +56,16 @@ def test_sigmoid_and_tanh_grads():
     assert big.grad == [0.0, 0.0]
 
 
+def test_gelu():
+    k = math.sqrt(2 / math.pi)
+    for x in [-10.0, -3.0, -1.0, 0.0, 0.5, 1.0, 3.0, 10.0]:
+        out = tensor([x]).gelu().data[0]
+        assert close(out, 0.5 * x * (1 + math.tanh(k * (x + 0.044715 * x ** 3)))), x
+        # the tanh form stays close to the exact erf form
+        assert abs(out - 0.5 * x * (1 + math.erf(x / math.sqrt(2)))) < 1e-3, x
+    gradcheck(lambda a: a.gelu().sum(), tensor([-3.0, -1.0, -0.2, 0.0, 0.4, 1.5, 3.0]))
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:
