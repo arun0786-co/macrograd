@@ -53,7 +53,9 @@ class linear(module):
         # nout no of op features ,
         # nin no of  ip features ,
         super().__init__()
-        w_data = [[random.uniform(-1,1) for _ in range(nout)] for _ in range(nin)]
+        # scale by fan-in so wider layers don't blow up activations (same bound as pytorch's default)
+        bound = nin ** -0.5
+        w_data = [[random.uniform(-bound, bound) for _ in range(nout)] for _ in range(nin)]
         self.w = tensor(w_data)
 
         b_data = [[0.0 for _ in range(nout)]]

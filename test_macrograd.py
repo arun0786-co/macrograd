@@ -2,7 +2,7 @@ import math
 import random
 
 from engine import tensor
-from nn import MLP, dropout
+from nn import MLP, dropout, linear
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -126,6 +126,12 @@ def test_dropout_graph_node():
     assert out._op == 'dropout'
     assert x in out._prev
     assert all(child._op == '' for child in out._prev)
+
+
+def test_linear_init_scales_with_fan_in():
+    random.seed(0)
+    layer = linear(400, 10)
+    assert max(abs(w) for w in layer.w.data) <= 400 ** -0.5
 
 
 def test_matmul_operator():
