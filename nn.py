@@ -134,8 +134,10 @@ class dropout(module):
         scale = 1.0 / (1.0 - self.p)
         mask_data = [scale if random.random() > self.p else 0.0 for _ in range(len(x.data))]
 
-        mask = tensor(mask_data, shape=x.shape, op='dropout')
+        # label the multiply, not the mask, so the graph shows x and mask going into dropout
+        mask = tensor(mask_data, shape=x.shape)
         out = x * mask
+        out._op = 'dropout'
         return out
     
     def parameters(self):
