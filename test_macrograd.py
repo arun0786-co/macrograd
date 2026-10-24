@@ -237,6 +237,14 @@ def test_sgd_training_step():
     assert losses[-1] < losses[0]
 
 
+def test_mlp_output_activation():
+    random.seed(4)
+    model = MLP([2, 3, 1], activation_fns=[lambda x: x.relu(), lambda x: x.tanh()])
+    x = tensor([[0.5, -1.0]])
+    expected = model.layers[1](model.layers[0](x).relu()).tanh()
+    assert model(x).data == expected.data
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

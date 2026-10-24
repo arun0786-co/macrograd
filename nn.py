@@ -115,6 +115,8 @@ class MLP(module):
 
                 if self.dropouts[i] is not None:
                     out = self.dropouts[i](out)
+            elif i < len(self.activation_fns) and self.activation_fns[i]:
+                out = self.activation_fns[i](out)
         
         return out
 
