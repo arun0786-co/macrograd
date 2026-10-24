@@ -2,6 +2,7 @@ import math
 import random
 
 from engine import tensor
+from nn import MLP
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -104,6 +105,19 @@ def test_cross_entropy_grads():
     targets = tensor([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
     x = tensor([[0.3, -0.2, 0.5], [2.0, 0.1, -1.0]])
     gradcheck(lambda a: a.cross_entropy_loss(targets), x)
+
+
+def test_eval_turns_off_dropout():
+    random.seed(0)
+    model = MLP([3, 4, 4, 1], dropout_p=0.5)
+    x = tensor([[1.0, 2.0, 3.0]])
+
+    model.eval()
+    assert model(x).data == model(x).data
+
+    model.train()
+    outputs = {tuple(model(x).data) for _ in range(20)}
+    assert len(outputs) > 1
 
 
 if __name__ == "__main__":

@@ -90,24 +90,25 @@ class MLP(module):
         
         for i in range(len(layer_sizes)-1):
             self.layers.append(linear(layer_sizes[i], layer_sizes[i+1]))
-            if i < num_hidden and self.dropout_ps[i] > 0:
-                self.dropouts.append((i, dropout(p=self.dropout_ps[i])))
+            # one entry per hidden layer, None where there is no dropout.
+            # kept as plain modules in a list so train() and eval() reach them
+            if i < num_hidden:
+                p = self.dropout_ps[i]
+                self.dropouts.append(dropout(p=p) if p > 0 else None)
 
     def __call__(self,x):
         out = x
-        dropout_idx = 0
-        
+
         for i, layer in enumerate(self.layers):
             out = layer(out)
-            
+
             if i < len(self.layers) - 1:
                 act_fn = self.activation_fns[i]
                 if act_fn:
                     out = act_fn(out)
-                
-                if dropout_idx < len(self.dropouts) and self.dropouts[dropout_idx][0] == i:
-                    out = self.dropouts[dropout_idx][1](out)
-                    dropout_idx += 1
+
+                if self.dropouts[i] is not None:
+                    out = self.dropouts[i](out)
         
         return out
 
