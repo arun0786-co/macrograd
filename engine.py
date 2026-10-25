@@ -593,3 +593,31 @@ class tensor:
                 
         out._backward = _backward
         return out
+
+
+def gradcheck(f, *inputs, eps=1e-6, atol=1e-5, rtol=1e-4):
+    # checks backward() against central finite differences: nudge each input value
+    # up and down by eps and measure how much the output moves, (f(x+eps) - f(x-eps)) / 2eps.
+    # f must return a single value, like a loss. returns True or raises at the first mismatch
+    for x in inputs:
+        x.grad = [0.0] * len(x.data)
+    out = f(*inputs)
+    if len(out.data) != 1:
+        raise ValueError(f"gradcheck needs f to return a single value, got shape {out.shape}")
+    out.backward()
+
+    for n, x in enumerate(inputs):
+        for i in range(len(x.data)):
+            old = x.data[i]
+            x.data[i] = old + eps
+            up = f(*inputs).data[0]
+            x.data[i] = old - eps
+            down = f(*inputs).data[0]
+            x.data[i] = old
+
+            numeric = (up - down) / (2 * eps)
+            analytic = x.grad[i]
+            if abs(analytic - numeric) > atol + rtol * abs(numeric):
+                raise ValueError(f"Gradient mismatch at input {n}, index {i}: "
+                                 f"backward gave {analytic}, finite differences gave {numeric}")
+    return True

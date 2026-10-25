@@ -1,30 +1,13 @@
 import math
 import random
 
-from engine import tensor
+from engine import tensor, gradcheck
 from nn import MLP, dropout, linear
 from optim import SGD
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
     return math.isclose(a, b, rel_tol=rel, abs_tol=abs_tol)
-
-
-def gradcheck(f, *inputs, eps=1e-6, tol=1e-6):
-    # compare backward() against central finite differences
-    for x in inputs:
-        x.grad = [0.0] * len(x.data)
-    f(*inputs).backward()
-    for x in inputs:
-        for i in range(len(x.data)):
-            old = x.data[i]
-            x.data[i] = old + eps
-            up = f(*inputs).data[0]
-            x.data[i] = old - eps
-            down = f(*inputs).data[0]
-            x.data[i] = old
-            numeric = (up - down) / (2 * eps)
-            assert abs(numeric - x.grad[i]) < tol, (i, numeric, x.grad[i])
 
 
 def raises(fn, error):
@@ -250,6 +233,24 @@ def test_mlp_output_activation():
     x = tensor([[0.5, -1.0]])
     expected = model.layers[1](model.layers[0](x).relu()).tanh()
     assert model(x).data == expected.data
+
+
+
+def test_gradcheck_catches_wrong_backward():
+    def bad_square(a):
+        out = tensor([v * v for v in a.data], shape=a.shape, children=(a,), op='bad_square')
+
+        def _backward():
+            for i in range(len(a.data)):
+                a.grad[i] += a.data[i] * out.grad[i]  # should be 2 * a.data[i]
+
+        out._backward = _backward
+        return out.sum()
+
+    x = tensor([1.0, 2.0, -3.0])
+    assert raises(lambda: gradcheck(bad_square, x), ValueError)
+    assert gradcheck(lambda a: (a * a).sum(), x)
+    assert raises(lambda: gradcheck(lambda a: a * a, x), ValueError)
 
 
 if __name__ == "__main__":
