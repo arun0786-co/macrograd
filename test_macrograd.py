@@ -253,6 +253,30 @@ def test_gradcheck_catches_wrong_backward():
     assert raises(lambda: gradcheck(lambda a: a * a, x), ValueError)
 
 
+
+def test_reshape():
+    a = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    b = a.reshape(3, 2)
+    assert b.shape == (3, 2) and b.data == a.data
+    assert b.get_element(2, 1) == 6.0
+    assert a.shape == (2, 3)
+
+    assert a.reshape(-1).shape == (6,)
+    assert a.reshape(3, -1).shape == (3, 2)
+    assert a.reshape((1, -1)).shape == (1, 6)
+    assert tensor([5.0]).reshape(()).shape == ()
+
+    assert raises(lambda: a.reshape(4, 2), ValueError)
+    assert raises(lambda: a.reshape(-1, -1), ValueError)
+    assert raises(lambda: a.reshape(5, -1), ValueError)
+    assert raises(lambda: a.reshape(-2, -3), ValueError)
+
+    # distinct weights, so a gradient landing in the wrong position would show up
+    w = tensor([[1.0], [-2.0]])
+    weights = tensor([0.5, -1.0, 2.0, 3.0, -0.7, 1.5])
+    gradcheck(lambda x: (x.reshape(3, 2) @ w).sum() + (x.reshape(-1) * weights).sum(), a)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

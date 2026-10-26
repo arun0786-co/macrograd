@@ -268,6 +268,35 @@ class tensor:
         flat_index = sum(i * s for i, s in zip(indices, self.strides))
         return self.data[flat_index]
 
+    def reshape(self, *shape):
+        # data is stored flat, so reshaping only changes the shape and the values keep
+        # their order. backward is the same: each grad goes straight back to its position.
+        # accepts x.reshape(2, 3) or x.reshape((2, 3)); one dim can be -1 and is inferred
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        if shape.count(-1) > 1 or any(d < -1 for d in shape):
+            raise ValueError(f"Invalid shape {shape}")
+
+        known = 1
+        for d in shape:
+            if d != -1:
+                known *= d
+        if -1 in shape:
+            if known == 0 or len(self.data) % known != 0:
+                raise ValueError(f"Cannot reshape {self.shape} ({len(self.data)} values) to {shape}")
+            shape = tuple(len(self.data) // known if d == -1 else d for d in shape)
+        elif known != len(self.data):
+            raise ValueError(f"Cannot reshape {self.shape} ({len(self.data)} values) to {shape}")
+
+        out = tensor(self.data, shape=shape, children=(self,), op='reshape')
+
+        def _backward():
+            for i in range(len(self.data)):
+                self.grad[i] += out.grad[i]
+
+        out._backward = _backward
+        return out
+
     def expand(self, target_shape):
         if self.shape == target_shape:
             return self
