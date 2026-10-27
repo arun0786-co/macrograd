@@ -277,6 +277,40 @@ def test_reshape():
     gradcheck(lambda x: (x.reshape(3, 2) @ w).sum() + (x.reshape(-1) * weights).sum(), a)
 
 
+def test_transpose():
+    a = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    t = a.transpose()
+    assert t.shape == (3, 2) and t.data == [1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+    assert a.transpose(0, 1).data == a.transpose(1, 0).data == t.data
+    assert t.transpose().data == a.data
+    assert a.transpose(0, 0).data == a.data
+
+    # (A B)^T = B^T A^T
+    b = tensor([[1.0, -1.0], [0.5, 2.0], [3.0, 0.0]])
+    assert (a @ b).transpose().data == (b.transpose() @ a.transpose()).data
+
+    x = tensor([float(v) for v in range(24)], shape=(2, 3, 4))
+    y = x.transpose(0, 2)
+    assert y.shape == (4, 3, 2)
+    assert x.transpose(-1, 0).data == y.data
+    for i in range(2):
+        for j in range(3):
+            for k in range(4):
+                assert y.get_element(k, j, i) == x.get_element(i, j, k)
+                assert x.transpose().get_element(i, k, j) == x.get_element(i, j, k)
+
+    assert raises(lambda: tensor([1.0, 2.0]).transpose(), IndexError)
+    assert raises(lambda: x.transpose(0, 3), IndexError)
+
+    # distinct weights, so a gradient landing in the wrong position would show up
+    w = tensor([[1.0], [-2.0]])
+    weights = tensor([[0.5, -1.0], [2.0, 3.0], [-0.7, 1.5]])
+    gradcheck(lambda m: (m.transpose() @ w).sum() + (m.transpose() * weights).sum(), a)
+
+    weights = tensor([0.5 * v - 3.0 for v in range(24)], shape=(4, 3, 2))
+    gradcheck(lambda m: (m.transpose(0, 2) * weights).sum(), x)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

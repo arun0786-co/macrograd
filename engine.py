@@ -297,6 +297,38 @@ class tensor:
         out._backward = _backward
         return out
 
+    def transpose(self, dim0=-2, dim1=-1):
+        # swaps two dims; the default swaps the last two, so a matrix becomes its transpose.
+        # the values are written out again in the new order, so the output is a plain
+        # tensor like any other. each output value is copied from one input position,
+        # so backward sends each grad straight back to the position it came from.
+        n = len(self.shape)
+        for d in (dim0, dim1):
+            if not -n <= d < n:
+                raise IndexError(f"Dim {d} out of range for shape {self.shape}")
+        dim0, dim1 = dim0 % n, dim1 % n
+
+        shape = list(self.shape)
+        shape[dim0], shape[dim1] = shape[dim1], shape[dim0]
+        shape = tuple(shape)
+        out_strides = self._compute_strides(shape)
+
+        # src[i] is the position in self.data that output position i copies from
+        src = []
+        for i in range(len(self.data)):
+            index = [(i // s) % d for s, d in zip(out_strides, shape)]
+            index[dim0], index[dim1] = index[dim1], index[dim0]
+            src.append(sum(k * s for k, s in zip(index, self.strides)))
+
+        out = tensor([self.data[j] for j in src], shape=shape, children=(self,), op='transpose')
+
+        def _backward():
+            for i, j in enumerate(src):
+                self.grad[j] += out.grad[i]
+
+        out._backward = _backward
+        return out
+
     def expand(self, target_shape):
         if self.shape == target_shape:
             return self
