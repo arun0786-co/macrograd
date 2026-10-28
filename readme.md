@@ -25,7 +25,7 @@ Macrograd goes further:
 * Reductions: `.sum(axis, keepdim)` (everything by default, or along one axis), `.mean(axis, keepdim)`, `.var(axis, keepdim)`, `.std()`, `.max(axis, keepdim)`, `.argmax(axis, keepdim)`.
 * Shape ops: `.reshape()` (one dimension can be `-1` and is inferred), `.transpose(dim0, dim1)` (swaps the last two dims by default), indexing with ints, slices and lists of ints (`x[0]`, `x[:, 1:3]`, `x[[2, 0]]`). `concat(tensors, axis)` joins tensors along an axis.
 * Broadcasting like numpy: `+` and `*` line shapes up from the right and repeat size-1 dims, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it directly.
-* Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` (per row).
+* Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` and `log_softmax` (per row).
 * Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop).
 * `gradcheck(f, *inputs)` checks any op's backward pass against finite differences.
 

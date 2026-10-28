@@ -723,6 +723,35 @@ class tensor:
         out._backward = _backward
         return out
     
+    def log_softmax(self):
+        # log of softmax over the last dim, without taking the log of a tiny softmax value:
+        # log_softmax(x)_j = x_j - max - log(sum_k exp(x_k - max)).
+        # d out_j / d x_i = [i == j] - softmax_i, so the grad for x_i in a row is
+        # g_i - softmax_i * (sum of g over the row)
+        C = self.shape[-1] if self.shape else 1
+        out_data = [0.0] * len(self.data)
+        softmax_vals = [0.0] * len(self.data)
+        for start in range(0, len(self.data), C):
+            row = self.data[start:start + C]
+            max_val = max(row)
+            exp_vals = [self._taylor_exp(v - max_val) for v in row]
+            sum_exp = sum(exp_vals)
+            log_sum_exp = self._taylor_log(sum_exp)
+            for j in range(C):
+                out_data[start + j] = row[j] - max_val - log_sum_exp
+                softmax_vals[start + j] = exp_vals[j] / sum_exp
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='log_softmax')
+
+        def _backward():
+            for start in range(0, len(self.data), C):
+                total = sum(out.grad[start:start + C])
+                for j in range(C):
+                    self.grad[start + j] += out.grad[start + j] - softmax_vals[start + j] * total
+
+        out._backward = _backward
+        return out
+
     def mse_loss(self, target):
         if self.shape != target.shape:
             raise ValueError(f"Shape mismatch in mse_loss: {self.shape} vs {target.shape}")

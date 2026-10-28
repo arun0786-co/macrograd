@@ -510,6 +510,27 @@ def test_concat():
     gradcheck(lambda p, q: (concat([p, q], axis=1) * weights).sum(), x, y)
 
 
+def test_log_softmax():
+    logits = [[1.0, 2.0, 3.0], [1000.0, 0.0, -1000.0], [-5.0, -5.0, -5.0]]
+    out = tensor(logits).log_softmax()
+    for r, row in enumerate(logits):
+        m = max(row)
+        log_sum_exp = m + math.log(sum(math.exp(v - m) for v in row))
+        for j, v in enumerate(row):
+            assert close(out.data[r * 3 + j], v - log_sum_exp, abs_tol=1e-9), (r, j)
+    # stays finite where log(softmax) would be log(0)
+    assert out.data[5] == -2000.0
+
+    x = tensor([[0.5, -0.3, 0.1], [2.0, 1.0, -1.0]])
+    for a, b in zip(x.log_softmax().data, x.softmax().data):
+        assert close(a, math.log(b))
+
+    weights = tensor([[0.3, -1.0, 2.0], [1.5, 0.2, -0.7]])
+    gradcheck(lambda t: (t.log_softmax() * weights).sum(), x)
+    gradcheck(lambda t: (t.log_softmax() * tensor([0.5, 2.0, -1.0, 0.7])).sum(),
+              tensor([0.1, -0.2, 0.3, 1.5]))
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:
