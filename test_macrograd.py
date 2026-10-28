@@ -442,6 +442,40 @@ def test_max_and_argmax():
         gradcheck(lambda t: (t.max(axis=axis) * weights).sum(), x)
 
 
+def test_getitem():
+    a = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert a[1].data == [4.0, 5.0, 6.0] and a[1].shape == (3,)
+    assert a[-1].data == a[1].data
+    assert a[0, 2].data == [3.0] and a[0, 2].shape == ()
+    assert a[:, 1].data == [2.0, 5.0] and a[:, 1].shape == (2,)
+    assert a[:, ::2].data == [1.0, 3.0, 4.0, 6.0] and a[:, ::2].shape == (2, 2)
+    assert a[0:1].shape == (1, 3)
+    assert a[:, ::-1].data == [3.0, 2.0, 1.0, 6.0, 5.0, 4.0]
+    assert a[[1, 0, 1]].data == [4.0, 5.0, 6.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert a[5:].shape == (0, 3)
+
+    x = tensor([float(v) for v in range(24)], shape=(2, 3, 4))
+    y = x[1, 1:, [3, 0]]
+    assert y.shape == (2, 2)
+    for j in range(2):
+        for k, c in enumerate([3, 0]):
+            assert y.get_element(j, k) == x.get_element(1, j + 1, c)
+
+    assert raises(lambda: a[2], IndexError)
+    assert raises(lambda: a[0, 0, 0], IndexError)
+    assert raises(lambda: a[[0, 3]], IndexError)
+    assert raises(lambda: a[0.5], TypeError)
+
+    # a repeated row gets its grad added twice
+    rows = a[[1, 1]]
+    rows.sum().backward()
+    assert a.grad == [0.0, 0.0, 0.0, 2.0, 2.0, 2.0]
+
+    weights = tensor([[0.5, -1.0], [2.0, 3.0], [-0.7, 1.5]])
+    gradcheck(lambda t: (t[1, :, [3, 0, 3]] * tensor([0.5, -1.0, 2.0])).sum()
+              + (t[:, 1:, 0].transpose() * weights[:2]).sum(), x)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

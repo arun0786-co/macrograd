@@ -324,6 +324,48 @@ class tensor:
         out._backward = _backward
         return out
 
+    def __getitem__(self, key):
+        # one entry per dim, starting from the left; dims without an entry are kept whole.
+        #   an int picks one position and drops that dim:   x[1], x[-1], x[0, 2]
+        #   a slice keeps a range:                            x[1:3], x[:, ::2]
+        #   a list of ints picks those positions in order:    x[[2, 0, 0]]
+        # every output value is copied from one input position, so backward adds each
+        # grad back to where it came from (more than once if a list repeats a position)
+        if not isinstance(key, tuple):
+            key = (key,)
+        if len(key) > len(self.shape):
+            raise IndexError(f"Too many indices {key} for shape {self.shape}")
+
+        def position(i, size):
+            if isinstance(i, bool) or not isinstance(i, int):
+                raise TypeError(f"Indices must be ints, slices or lists of ints, got {i!r}")
+            if not -size <= i < size:
+                raise IndexError(f"Index {i} out of range for size {size}")
+            return i % size
+
+        shape = []
+        src = [0]
+        for dim, size in enumerate(self.shape):
+            k = key[dim] if dim < len(key) else slice(None)
+            if isinstance(k, slice):
+                picks = list(range(*k.indices(size)))
+                shape.append(len(picks))
+            elif isinstance(k, list):
+                picks = [position(i, size) for i in k]
+                shape.append(len(picks))
+            else:
+                picks = [position(k, size)]
+            src = [j + p * self.strides[dim] for j in src for p in picks]
+
+        out = tensor([self.data[j] for j in src], shape=shape, children=(self,), op='getitem')
+
+        def _backward():
+            for i, j in enumerate(src):
+                self.grad[j] += out.grad[i]
+
+        out._backward = _backward
+        return out
+
     @staticmethod
     def _broadcast_shape(a, b):
         # line the shapes up from the right. in each position the sizes must match or one
