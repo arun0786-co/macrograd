@@ -24,7 +24,7 @@ Macrograd goes further:
 * All ops: `+`, `-`, `*`, `/`, `**`, `@` (batched matmul).
 * Reductions: `.sum(axis, keepdim)` (everything by default, or along one axis), `.mean()`, `.var()`, `.std()`.
 * Shape ops: `.reshape()` (one dimension can be `-1` and is inferred), `.transpose(dim0, dim1)` (swaps the last two dims by default).
-* Broadcasting via `.expand()` for scalars and bias rows, on either side of `+` and `*`.
+* Broadcasting like numpy: `+` and `*` line shapes up from the right and repeat size-1 dims, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it directly.
 * Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` (per row).
 * Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop).
 * `gradcheck(f, *inputs)` checks any op's backward pass against finite differences.

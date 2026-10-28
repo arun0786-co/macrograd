@@ -347,6 +347,40 @@ def test_sum_over_axis():
     gradcheck(lambda m: (m.sum(axis=0, keepdim=True) @ w).sum(), a)
 
 
+def test_full_broadcasting():
+    col = tensor([[1.0], [2.0], [3.0]])
+    row = tensor([10.0, 20.0, 30.0, 40.0])
+    out = col + row
+    assert out.shape == (3, 4)
+    for i in range(3):
+        for j in range(4):
+            assert out.get_element(i, j) == col.get_element(i, 0) + row.get_element(j)
+    assert (row * col).data == (col * row).data
+
+    x = tensor([float(v) for v in range(24)], shape=(2, 3, 4))
+    m = tensor([[2.0], [-1.0], [0.5]])
+    out = x * m
+    assert out.shape == (2, 3, 4)
+    for i in range(2):
+        for j in range(3):
+            for k in range(4):
+                assert out.get_element(i, j, k) == x.get_element(i, j, k) * m.get_element(j, 0)
+
+    e = tensor([[1.0, 2.0]]).expand((2, 3, 2))
+    assert e.shape == (2, 3, 2) and e.data == [1.0, 2.0] * 6
+    assert tensor(5.0).expand((2, 2)).data == [5.0] * 4
+
+    assert raises(lambda: tensor([1.0, 2.0]) + tensor([1.0, 2.0, 3.0]), ValueError)
+    assert raises(lambda: tensor([[1.0, 2.0]]).expand((2,)), ValueError)
+    assert raises(lambda: tensor([[1.0, 2.0], [3.0, 4.0]]).expand((3, 2)), ValueError)
+
+    # distinct weights, so a grad added to the wrong value would show up
+    weights = tensor([0.3 * v - 1.0 for v in range(24)], shape=(2, 3, 4))
+    gradcheck(lambda a, b: ((a + b) * weights).sum(), col, row)
+    gradcheck(lambda a, b: (a * b * weights).sum(), x, m)
+    gradcheck(lambda a: (a.expand((2, 3, 4)) * weights).sum(), tensor([[0.5], [-1.0], [2.0]]))
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

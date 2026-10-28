@@ -102,11 +102,8 @@ class tensor:
         if isinstance(other, (int, float)):
             other = tensor([other] * len(self.data), shape=self.shape)
         if isinstance(other, tensor) and self.shape != other.shape:
-            # expand whichever side is smaller
-            if len(other.data) < len(self.data):
-                other = other.expand(self.shape)
-            else:
-                return self.expand(other.shape) + other
+            shape = self._broadcast_shape(self.shape, other.shape)
+            return self.expand(shape) + other.expand(shape)
 
         if self.shape != other.shape:
             raise ValueError(f"Shape mismatch: {self.shape} + {other.shape}")
@@ -130,10 +127,8 @@ class tensor:
         if isinstance(other, (int,float)):
             other = tensor([other] * len(self.data),shape=self.shape)
         if isinstance(other, tensor) and self.shape != other.shape:
-            if len(other.data) < len(self.data):
-                other = other.expand(self.shape)
-            else:
-                return self.expand(other.shape) * other
+            shape = self._broadcast_shape(self.shape, other.shape)
+            return self.expand(shape) * other.expand(shape)
 
         if self.shape != other.shape:
             raise ValueError(f"Shape mismatch: {self.shape} * {other.shape}")
@@ -329,38 +324,48 @@ class tensor:
         out._backward = _backward
         return out
 
+    @staticmethod
+    def _broadcast_shape(a, b):
+        # line the shapes up from the right. in each position the sizes must match or one
+        # of them must be 1, and a missing dim counts as 1. (3, 1) and (4,) give (3, 4)
+        n = max(len(a), len(b))
+        a = (1,) * (n - len(a)) + tuple(a)
+        b = (1,) * (n - len(b)) + tuple(b)
+        shape = []
+        for da, db in zip(a, b):
+            if da != db and da != 1 and db != 1:
+                raise ValueError(f"Shapes {a} and {b} can't be broadcast together")
+            shape.append(db if da == 1 else da)
+        return tuple(shape)
+
     def expand(self, target_shape):
+        # repeats values along dims of size 1, and adds new dims on the left, until the
+        # tensor has target_shape. many output positions copy the same input value, so
+        # backward adds all their grads back into that one value.
+        target_shape = tuple(target_shape)
         if self.shape == target_shape:
             return self
-        target_len = 1
-        for dim in target_shape:
-            target_len *= dim
+        if self.shape == (1,) and target_shape == ():
+            return self.reshape(())
+        extra = len(target_shape) - len(self.shape)
+        if extra < 0 or any(d != 1 and d != t for d, t in zip(self.shape, target_shape[extra:])):
+            raise ValueError(f"Cannot broadcast {self.shape} to {target_shape}")
 
-        # Expand a scalar
-        if self.shape == (1,) or self.shape == ():
-            # treat empty-shape scalar and (1,) as scalar
-            out_data = [self.data[0]] * target_len
-            out = tensor(out_data, shape=target_shape, children=(self,), op='expand')
-            def _backward():
-                s = 0.0
-                for v in out.grad:
-                    s += v
-                self.grad[0] += s
-            out._backward = _backward
-            return out
+        # an output index moves through self.data with self's stride, or not at all
+        # along a dim that self repeats (size 1) or doesn't have (the new dims on the left)
+        strides = [0] * extra + [0 if d == 1 else s for d, s in zip(self.shape, self.strides)]
+        src = [0]
+        for size, stride in zip(target_shape, strides):
+            src = [j + k * stride for j in src for k in range(size)]
 
-        # Expand a bias row (1, N) to (M, N)
-        if len(self.shape) == 2 and self.shape[0] == 1 and len(target_shape) == 2 and self.shape[1] == target_shape[1]:
-            M, N = target_shape
-            out_data = self.data * M
-            out = tensor(out_data, shape=target_shape, children=(self,), op='expand')
-            def _backward():
-                for i in range(M * N):
-                    self.grad[i % N] += out.grad[i]
-            out._backward = _backward
-            return out
-        raise ValueError(f"Cannot broadcast {self.shape} to {target_shape}")
-    
+        out = tensor([self.data[j] for j in src], shape=target_shape, children=(self,), op='expand')
+
+        def _backward():
+            for i, j in enumerate(src):
+                self.grad[j] += out.grad[i]
+
+        out._backward = _backward
+        return out
 
     def relu(self):
         out_data = [0.0] * len(self.data)
