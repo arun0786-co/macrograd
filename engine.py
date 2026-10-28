@@ -798,6 +798,41 @@ class tensor:
         return out
 
 
+def concat(tensors, axis=0):
+    # joins tensors along one axis; every other dim must match. inside each [outer] block
+    # the output holds the first tensor's values along the axis, then the second's, and so on.
+    # each output value is copied from one input position, so backward hands each grad back
+    tensors = list(tensors)
+    if not tensors:
+        raise ValueError("concat needs at least one tensor")
+    first = tensors[0]
+    outer, _, inner, _ = first._reduce_layout(axis, False)
+    axis = axis % len(first.shape)
+    for t in tensors:
+        if (len(t.shape) != len(first.shape) or t.shape[:axis] != first.shape[:axis]
+                or t.shape[axis + 1:] != first.shape[axis + 1:]):
+            raise ValueError(f"Cannot concat shapes {first.shape} and {t.shape} along axis {axis}")
+
+    # sources[i] is (which tensor, position in its data) for output position i
+    sources = []
+    for o in range(outer):
+        for n, t in enumerate(tensors):
+            block = t.shape[axis] * inner
+            for p in range(o * block, (o + 1) * block):
+                sources.append((n, p))
+
+    size = sum(t.shape[axis] for t in tensors)
+    shape = first.shape[:axis] + (size,) + first.shape[axis + 1:]
+    out = tensor([tensors[n].data[p] for n, p in sources], shape=shape, children=tensors, op='concat')
+
+    def _backward():
+        for i, (n, p) in enumerate(sources):
+            tensors[n].grad[p] += out.grad[i]
+
+    out._backward = _backward
+    return out
+
+
 def gradcheck(f, *inputs, eps=1e-6, atol=1e-5, rtol=1e-4):
     # checks backward() against central finite differences: nudge each input value
     # up and down by eps and measure how much the output moves, (f(x+eps) - f(x-eps)) / 2eps.

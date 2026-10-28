@@ -1,7 +1,7 @@
 import math
 import random
 
-from engine import tensor, gradcheck
+from engine import tensor, concat, gradcheck
 from nn import MLP, dropout, linear
 from optim import SGD
 
@@ -474,6 +474,40 @@ def test_getitem():
     weights = tensor([[0.5, -1.0], [2.0, 3.0], [-0.7, 1.5]])
     gradcheck(lambda t: (t[1, :, [3, 0, 3]] * tensor([0.5, -1.0, 2.0])).sum()
               + (t[:, 1:, 0].transpose() * weights[:2]).sum(), x)
+
+
+def test_concat():
+    a = tensor([[1.0, 2.0], [3.0, 4.0]])
+    b = tensor([[5.0, 6.0]])
+    c = tensor([[7.0], [8.0]])
+    assert concat([a, b]).data == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] and concat([a, b]).shape == (3, 2)
+    assert concat([a, c], axis=1).data == [1.0, 2.0, 7.0, 3.0, 4.0, 8.0]
+    assert concat([a, c], axis=-1).shape == (2, 3)
+    assert concat([tensor([1.0]), tensor([2.0, 3.0])]).data == [1.0, 2.0, 3.0]
+
+    x = tensor([float(v) for v in range(24)], shape=(2, 3, 4))
+    y = tensor([100.0 + v for v in range(16)], shape=(2, 2, 4))
+    z = concat([x, y], axis=1)
+    assert z.shape == (2, 5, 4)
+    for i in range(2):
+        for j in range(5):
+            for k in range(4):
+                expected = x.get_element(i, j, k) if j < 3 else y.get_element(i, j - 3, k)
+                assert z.get_element(i, j, k) == expected
+    # concat undoes slicing
+    assert concat([x[:, :1], x[:, 1:]], axis=1).data == x.data
+
+    assert raises(lambda: concat([a, c]), ValueError)
+    assert raises(lambda: concat([a, tensor([1.0, 2.0])]), ValueError)
+    assert raises(lambda: concat([a, b], axis=2), IndexError)
+    assert raises(lambda: concat([]), ValueError)
+
+    # the same tensor twice gets both grads
+    concat([b, b]).sum().backward()
+    assert b.grad == [2.0, 2.0]
+
+    weights = tensor([0.3 * v - 2.0 for v in range(40)], shape=(2, 5, 4))
+    gradcheck(lambda p, q: (concat([p, q], axis=1) * weights).sum(), x, y)
 
 
 if __name__ == "__main__":
