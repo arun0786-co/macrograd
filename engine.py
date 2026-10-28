@@ -520,13 +520,52 @@ class tensor:
         out._backward = _backward
         return out
 
-    def sum(self):
-        total = sum(self.data)
-        out = tensor([total], shape=(), children=(self,), op='sum')
+    def sum(self, axis=None, keepdim=False):
+        # axis=None adds up everything. with an axis, values that differ only along that
+        # axis are added together, so that dim disappears (or stays as size 1 with keepdim).
+        # every input value adds into one output value with weight 1, so backward copies
+        # each output grad back to all the inputs that went into it.
+        if axis is None:
+            total = sum(self.data)
+            shape = (1,) * len(self.shape) if keepdim else ()
+            out = tensor([total], shape=shape, children=(self,), op='sum')
+
+            def _backward():
+                for i in range(len(self.data)):
+                    self.grad[i] += out.grad[0]
+
+            out._backward = _backward
+            return out
+
+        n = len(self.shape)
+        if not -n <= axis < n:
+            raise IndexError(f"Axis {axis} out of range for shape {self.shape}")
+        axis = axis % n
+
+        # flat data is laid out as [outer][size][inner]; summing over size leaves [outer][inner]
+        outer = 1
+        for d in self.shape[:axis]:
+            outer *= d
+        size = self.shape[axis]
+        inner = 1
+        for d in self.shape[axis + 1:]:
+            inner *= d
+
+        # dst[i] is the output position that input position i adds into
+        dst = [o * inner + r for o in range(outer) for k in range(size) for r in range(inner)]
+        out_data = [0.0] * (outer * inner)
+        for i, j in enumerate(dst):
+            out_data[j] += self.data[i]
+
+        if keepdim:
+            shape = self.shape[:axis] + (1,) + self.shape[axis + 1:]
+        else:
+            shape = self.shape[:axis] + self.shape[axis + 1:]
+        out = tensor(out_data, shape=shape, children=(self,), op='sum')
 
         def _backward():
-            for i in range(len(self.data)):
-                self.grad[i] += out.grad[0]
+            for i, j in enumerate(dst):
+                self.grad[i] += out.grad[j]
 
         out._backward = _backward
         return out

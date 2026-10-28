@@ -311,6 +311,42 @@ def test_transpose():
     gradcheck(lambda m: (m.transpose(0, 2) * weights).sum(), x)
 
 
+def test_sum_over_axis():
+    a = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert a.sum().data == [21.0] and a.sum().shape == ()
+    assert a.sum(keepdim=True).shape == (1, 1)
+    assert a.sum(axis=0).data == [5.0, 7.0, 9.0] and a.sum(axis=0).shape == (3,)
+    assert a.sum(axis=1).data == [6.0, 15.0] and a.sum(axis=1).shape == (2,)
+    assert a.sum(axis=-1).data == a.sum(axis=1).data
+    assert a.sum(axis=0, keepdim=True).shape == (1, 3)
+    assert a.sum(axis=1, keepdim=True).shape == (2, 1)
+
+    x = tensor([float(v) for v in range(24)], shape=(2, 3, 4))
+    for axis, shape in [(0, (3, 4)), (1, (2, 4)), (2, (2, 3))]:
+        s = x.sum(axis=axis)
+        assert s.shape == shape
+        for i in range(2):
+            for j in range(3):
+                for k in range(4):
+                    out_index = [i, j, k]
+                    del out_index[axis]
+                    expected = sum(x.get_element(*(out_index[:axis] + [t] + out_index[axis:]))
+                                   for t in range(x.shape[axis]))
+                    assert s.get_element(*out_index) == expected
+
+    assert raises(lambda: a.sum(axis=2), IndexError)
+    assert raises(lambda: tensor(3.0).sum(axis=0), IndexError)
+
+    # distinct weights, so a gradient landing in the wrong position would show up
+    for axis in [0, 1, 2]:
+        shape = x.sum(axis=axis).shape
+        size = len(x.sum(axis=axis).data)
+        weights = tensor([0.7 * v - 2.0 for v in range(size)], shape=shape)
+        gradcheck(lambda m: (m.sum(axis=axis) * weights).sum(), x)
+    w = tensor([[1.0], [-2.0], [0.5]])
+    gradcheck(lambda m: (m.sum(axis=0, keepdim=True) @ w).sum(), a)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:
