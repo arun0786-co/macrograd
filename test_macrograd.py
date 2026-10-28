@@ -381,6 +381,30 @@ def test_full_broadcasting():
     gradcheck(lambda a: (a.expand((2, 3, 4)) * weights).sum(), tensor([[0.5], [-1.0], [2.0]]))
 
 
+def test_mean_and_var_over_axis():
+    a = tensor([[1.0, 2.0, 6.0], [4.0, 4.0, 4.0]])
+    assert close(a.mean().data[0], 21.0 / 6)
+    assert a.mean(axis=0).data == [2.5, 3.0, 5.0] and a.mean(axis=0).shape == (3,)
+    assert a.mean(axis=1).data == [3.0, 4.0] and a.mean(axis=-1, keepdim=True).shape == (2, 1)
+
+    v = a.var(axis=1)
+    assert v.shape == (2,)
+    assert close(v.data[0], ((1 - 3) ** 2 + (2 - 3) ** 2 + (6 - 3) ** 2) / 3) and v.data[1] == 0.0
+    assert a.var(axis=0, keepdim=True).shape == (1, 3)
+    assert close(a.var(axis=0).data[2], 1.0)
+    values = a.data
+    m = sum(values) / 6
+    assert close(a.var().data[0], sum((x - m) ** 2 for x in values) / 6)
+
+    x = tensor([0.1 * v * v - v for v in range(24)], shape=(2, 3, 4))
+    for axis in [0, 1, 2]:
+        out = x.mean(axis=axis)
+        weights = tensor([0.5 * v - 2.0 for v in range(len(out.data))], shape=out.shape)
+        gradcheck(lambda t: (t.mean(axis=axis) * weights).sum() + (t.var(axis=axis) * weights).sum(), x)
+
+    assert raises(lambda: a.mean(axis=2), IndexError)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

@@ -575,12 +575,22 @@ class tensor:
         out._backward = _backward
         return out
     
-    def mean(self):
-        return (self.sum() * (1.0 / len(self.data)))
+    def mean(self, axis=None, keepdim=False):
+        # sum divided by how many values went into each sum. built from sum and *, so
+        # backward comes for free: each input gets out.grad / count
+        if axis is None:
+            count = len(self.data)
+        else:
+            if not -len(self.shape) <= axis < len(self.shape):
+                raise IndexError(f"Axis {axis} out of range for shape {self.shape}")
+            count = self.shape[axis]
+        return self.sum(axis, keepdim) * (1.0 / count)
     
-    def var(self):
-        m = self.mean()
-        return ((self - m) ** 2).mean()
+    def var(self, axis=None, keepdim=False):
+        # mean of the squared distance from the mean (divides by n, not n - 1).
+        # the mean keeps its dim so it broadcasts back against self
+        m = self.mean(axis, keepdim=True)
+        return ((self - m) ** 2).mean(axis, keepdim)
     
     def std(self):
         # own op so a constant tensor gets gradient 0 (std is at its minimum there)

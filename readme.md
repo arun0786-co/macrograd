@@ -22,7 +22,7 @@ Macrograd goes further:
 
 * N-dimensional flat arrays with stride-based indexing.
 * All ops: `+`, `-`, `*`, `/`, `**`, `@` (batched matmul).
-* Reductions: `.sum(axis, keepdim)` (everything by default, or along one axis), `.mean()`, `.var()`, `.std()`.
+* Reductions: `.sum(axis, keepdim)` (everything by default, or along one axis), `.mean(axis, keepdim)`, `.var(axis, keepdim)`, `.std()`.
 * Shape ops: `.reshape()` (one dimension can be `-1` and is inferred), `.transpose(dim0, dim1)` (swaps the last two dims by default).
 * Broadcasting like numpy: `+` and `*` line shapes up from the right and repeat size-1 dims, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it directly.
 * Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` (per row).
