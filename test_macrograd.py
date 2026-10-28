@@ -531,6 +531,33 @@ def test_log_softmax():
               tensor([0.1, -0.2, 0.3, 1.5]))
 
 
+def test_nll_loss():
+    logp = tensor([[-0.5, -1.0, -2.0], [-3.0, -0.1, -4.0]])
+    assert close(logp.nll_loss([2, 1]).data[0], (2.0 + 0.1) / 2)
+    assert logp.nll_loss(tensor([0, 0])).data == logp.nll_loss([0.0, 0.0]).data == [1.75]
+    assert close(tensor([-0.2, -1.7]).nll_loss([1]).data[0], 1.7)
+
+    # log_softmax + nll_loss is cross entropy with one-hot targets
+    logits = [[0.3, -0.2, 0.5], [2.0, 0.1, -1.0], [1000.0, 0.0, -1000.0]]
+    labels = [1, 0, 2]
+    one_hot = [[1.0 if j == label else 0.0 for j in range(3)] for label in labels]
+    loss = tensor(logits).log_softmax().nll_loss(labels).data[0]
+    assert close(loss, ref_cross_entropy(logits, one_hot))
+    assert close(loss, tensor(logits).cross_entropy_loss(tensor(one_hot)).data[0])
+
+    # argmax output works as labels
+    assert logp.nll_loss(logp.argmax(axis=1)).data == logp.nll_loss([0, 1]).data
+
+    assert raises(lambda: logp.nll_loss([0]), ValueError)
+    assert raises(lambda: logp.nll_loss([0, 3]), ValueError)
+    assert raises(lambda: logp.nll_loss([0, -1]), ValueError)
+    assert raises(lambda: logp.nll_loss([0, 1.5]), ValueError)
+
+    x = tensor(logits[:2])
+    gradcheck(lambda t: t.log_softmax().nll_loss([1, 0]), x)
+    gradcheck(lambda t: (t * 2.0).nll_loss([2, 2]), x)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

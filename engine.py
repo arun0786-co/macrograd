@@ -804,6 +804,32 @@ class tensor:
         out._backward = _backward
         return out
     
+    def nll_loss(self, labels):
+        # negative log likelihood: self holds log probabilities, one row per example
+        # (usually from log_softmax), and labels holds the right class for each row as
+        # an int. loss = -(1/rows) * sum over rows of self[row, label].
+        # only the picked values affect the loss, and each one gets grad -1/rows
+        C = self.shape[-1] if self.shape else 1
+        rows = len(self.data) // C
+        labels = labels.data if isinstance(labels, tensor) else list(labels)
+        if len(labels) != rows:
+            raise ValueError(f"Got {len(labels)} labels for {rows} rows")
+        picked = []
+        for r, label in enumerate(labels):
+            if isinstance(label, bool) or not float(label).is_integer() or not 0 <= label < C:
+                raise ValueError(f"Label {label!r} is not a class index in 0..{C - 1}")
+            picked.append(r * C + int(label))
+
+        loss_val = -sum(self.data[i] for i in picked) / rows
+        out = tensor([loss_val], shape=(), children=(self,), op='nll_loss')
+
+        def _backward():
+            for i in picked:
+                self.grad[i] += -out.grad[0] / rows
+
+        out._backward = _backward
+        return out
+
     def gelu(self):
         # tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
         k = 0.7978845608028654
