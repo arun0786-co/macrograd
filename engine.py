@@ -525,6 +525,26 @@ class tensor:
         out._backward = _backward
         return out
 
+    def _reduce_layout(self, axis, keepdim):
+        # for reducing over one axis: flat data is laid out as [outer][size][inner], where
+        # size is the axis being reduced. position (o, k, r) is at (o * size + k) * inner + r,
+        # and reducing over k leaves [outer][inner]. also returns the output shape
+        n = len(self.shape)
+        if not -n <= axis < n:
+            raise IndexError(f"Axis {axis} out of range for shape {self.shape}")
+        axis = axis % n
+        outer = 1
+        for d in self.shape[:axis]:
+            outer *= d
+        inner = 1
+        for d in self.shape[axis + 1:]:
+            inner *= d
+        if keepdim:
+            shape = self.shape[:axis] + (1,) + self.shape[axis + 1:]
+        else:
+            shape = self.shape[:axis] + self.shape[axis + 1:]
+        return outer, self.shape[axis], inner, shape
+
     def sum(self, axis=None, keepdim=False):
         # axis=None adds up everything. with an axis, values that differ only along that
         # axis are added together, so that dim disappears (or stays as size 1 with keepdim).
@@ -542,19 +562,7 @@ class tensor:
             out._backward = _backward
             return out
 
-        n = len(self.shape)
-        if not -n <= axis < n:
-            raise IndexError(f"Axis {axis} out of range for shape {self.shape}")
-        axis = axis % n
-
-        # flat data is laid out as [outer][size][inner]; summing over size leaves [outer][inner]
-        outer = 1
-        for d in self.shape[:axis]:
-            outer *= d
-        size = self.shape[axis]
-        inner = 1
-        for d in self.shape[axis + 1:]:
-            inner *= d
+        outer, size, inner, shape = self._reduce_layout(axis, keepdim)
 
         # dst[i] is the output position that input position i adds into
         dst = [o * inner + r for o in range(outer) for k in range(size) for r in range(inner)]
@@ -562,10 +570,6 @@ class tensor:
         for i, j in enumerate(dst):
             out_data[j] += self.data[i]
 
-        if keepdim:
-            shape = self.shape[:axis] + (1,) + self.shape[axis + 1:]
-        else:
-            shape = self.shape[:axis] + self.shape[axis + 1:]
         out = tensor(out_data, shape=shape, children=(self,), op='sum')
 
         def _backward():
