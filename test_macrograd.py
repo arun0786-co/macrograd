@@ -405,6 +405,43 @@ def test_mean_and_var_over_axis():
     assert raises(lambda: a.mean(axis=2), IndexError)
 
 
+def test_max_and_argmax():
+    a = tensor([[1.0, 7.0, 3.0], [9.0, -2.0, 9.0]])
+    assert a.max().data == [9.0] and a.max().shape == ()
+    assert a.argmax().data == [3]
+    assert a.max(axis=1).data == [7.0, 9.0] and a.argmax(axis=1).data == [1, 0]
+    assert a.max(axis=0).data == [9.0, 7.0, 9.0] and a.argmax(axis=0).data == [1, 0, 1]
+    assert a.max(axis=-1, keepdim=True).shape == (2, 1)
+    assert a.argmax(axis=0, keepdim=True).shape == (1, 3)
+
+    random.seed(5)
+    x = tensor([random.uniform(-1, 1) for _ in range(24)], shape=(2, 3, 4))
+    for axis in [0, 1, 2]:
+        m, idx = x.max(axis=axis), x.argmax(axis=axis)
+        for i in range(2):
+            for j in range(3):
+                for k in range(4):
+                    out_index = [i, j, k]
+                    del out_index[axis]
+                    column = [x.get_element(*(out_index[:axis] + [t] + out_index[axis:]))
+                              for t in range(x.shape[axis])]
+                    assert m.get_element(*out_index) == max(column)
+                    assert idx.get_element(*out_index) == column.index(max(column))
+
+    # ties: the grad goes only to the first max, the one argmax points at
+    t = tensor([2.0, 5.0, 5.0])
+    t.max().backward()
+    assert t.grad == [0.0, 1.0, 0.0]
+
+    assert raises(lambda: a.max(axis=2), IndexError)
+    assert raises(lambda: tensor([], shape=(0,)).max(), ValueError)
+
+    for axis in [None, 0, 1, 2]:
+        out = x.max(axis=axis)
+        weights = tensor([0.5 * v - 2.0 for v in range(len(out.data))], shape=out.shape)
+        gradcheck(lambda t: (t.max(axis=axis) * weights).sum(), x)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

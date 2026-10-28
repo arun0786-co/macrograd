@@ -613,6 +613,48 @@ class tensor:
         out._backward = _backward
         return out
     
+    def _max_positions(self, axis, keepdim):
+        # for each output value: the flat position of the largest input along the axis,
+        # and its index along that axis. on ties the first one wins.
+        # axis=None looks at everything, so the index is a position in the flat data
+        if axis is None:
+            outer, size, inner = 1, len(self.data), 1
+            shape = (1,) * len(self.shape) if keepdim else ()
+        else:
+            outer, size, inner, shape = self._reduce_layout(axis, keepdim)
+        if size == 0:
+            raise ValueError(f"Cannot take the max over an empty axis of shape {self.shape}")
+
+        positions, indices = [], []
+        for o in range(outer):
+            for r in range(inner):
+                best = 0
+                for k in range(1, size):
+                    if self.data[(o * size + k) * inner + r] > self.data[(o * size + best) * inner + r]:
+                        best = k
+                positions.append((o * size + best) * inner + r)
+                indices.append(best)
+        return positions, indices, shape
+
+    def max(self, axis=None, keepdim=False):
+        # only the largest input decides the output, so backward sends each grad
+        # to that one position and the other inputs get 0
+        positions, _, shape = self._max_positions(axis, keepdim)
+        out = tensor([self.data[j] for j in positions], shape=shape, children=(self,), op='max')
+
+        def _backward():
+            for i, j in enumerate(positions):
+                self.grad[j] += out.grad[i]
+
+        out._backward = _backward
+        return out
+
+    def argmax(self, axis=None, keepdim=False):
+        # where the max is, as integer indices. not part of the graph: an index
+        # doesn't change smoothly with the input, so it has no gradient
+        _, indices, shape = self._max_positions(axis, keepdim)
+        return tensor(indices, shape=shape)
+
     def softmax(self):
         # over the last dimension, so each row of a (B, C) batch sums to 1
         C = self.shape[-1] if self.shape else 1
