@@ -558,6 +558,34 @@ def test_nll_loss():
     gradcheck(lambda t: (t * 2.0).nll_loss([2, 2]), x)
 
 
+def test_binary_cross_entropy_with_logits():
+    def ref(xs, ts):
+        total = 0.0
+        for x, t in zip(xs, ts):
+            p = ref_sigmoid(x)
+            total -= t * math.log(p) + (1 - t) * math.log(1 - p)
+        return total / len(xs)
+
+    xs, ts = [-2.0, -0.3, 0.0, 0.8, 3.0], [0.0, 1.0, 1.0, 0.0, 1.0]
+    loss = tensor(xs).binary_cross_entropy_with_logits(tensor(ts)).data[0]
+    assert close(loss, ref(xs, ts))
+    assert close(tensor([0.0]).binary_cross_entropy_with_logits(tensor([1.0])).data[0], math.log(2))
+    soft = tensor([[0.5, -1.0], [2.0, 0.1]]).binary_cross_entropy_with_logits(tensor([[0.2, 0.7], [0.9, 0.5]]))
+    assert close(soft.data[0], ref([0.5, -1.0, 2.0, 0.1], [0.2, 0.7, 0.9, 0.5]))
+
+    # confidently wrong: log(sigmoid(-1000)) would be log(0), here the loss is just 1000
+    big = tensor([-1000.0, 1000.0]).binary_cross_entropy_with_logits(tensor([1.0, 0.0]))
+    assert close(big.data[0], 1000.0)
+    right = tensor([-1000.0, 1000.0]).binary_cross_entropy_with_logits(tensor([0.0, 1.0]))
+    assert right.data[0] == 0.0
+
+    assert raises(lambda: tensor([1.0, 2.0]).binary_cross_entropy_with_logits(tensor([1.0])), ValueError)
+
+    targets = tensor([[0.0, 1.0, 1.0], [1.0, 0.0, 0.3]])
+    gradcheck(lambda t: t.binary_cross_entropy_with_logits(targets),
+              tensor([[-2.0, -0.3, 0.4], [0.8, 3.0, -1.2]]))
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

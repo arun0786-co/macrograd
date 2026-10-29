@@ -804,6 +804,29 @@ class tensor:
         out._backward = _backward
         return out
     
+    def binary_cross_entropy_with_logits(self, target):
+        # for yes/no outputs: self holds raw scores (logits), target holds 0 or 1 (or a
+        # probability) for each one, and the sigmoid happens inside. per value,
+        #   -t * log(sigmoid(x)) - (1 - t) * log(1 - sigmoid(x))  =  max(x, 0) - x * t + log(1 + exp(-|x|))
+        # the right side never takes the log of a tiny number, so large |x| stays finite.
+        # averaged over all values; d loss / d x = (sigmoid(x) - t) / n
+        if self.shape != target.shape:
+            raise ValueError(f"Shape mismatch in binary_cross_entropy_with_logits: {self.shape} vs {target.shape}")
+        n = len(self.data)
+        loss_val = 0.0
+        for x, t in zip(self.data, target.data):
+            loss_val += max(x, 0.0) - x * t + self._taylor_log(1.0 + self._taylor_exp(-abs(x)))
+        loss_val /= n
+
+        out = tensor([loss_val], shape=(), children=(self, target), op='bce_with_logits')
+
+        def _backward():
+            for i in range(n):
+                self.grad[i] += (self._sigmoid(self.data[i]) - target.data[i]) / n * out.grad[0]
+
+        out._backward = _backward
+        return out
+
     def nll_loss(self, labels):
         # negative log likelihood: self holds log probabilities, one row per example
         # (usually from log_softmax), and labels holds the right class for each row as
