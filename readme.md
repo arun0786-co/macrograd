@@ -27,6 +27,7 @@ Macrograd goes further:
 * Broadcasting like numpy: `+` and `*` line shapes up from the right and repeat size-1 dims, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it directly.
 * Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` and `log_softmax` (per row).
 * Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop), `nll_loss(labels)` (integer class labels, use after `log_softmax`), `binary_cross_entropy_with_logits` (sigmoid built in, for yes/no outputs).
+* `accuracy(labels)`: fraction of rows whose highest score is the right class.
 * `gradcheck(f, *inputs)` checks any op's backward pass against finite differences.
 
 **The Network (`nn`)**

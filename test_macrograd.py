@@ -586,6 +586,17 @@ def test_binary_cross_entropy_with_logits():
               tensor([[-2.0, -0.3, 0.4], [0.8, 3.0, -1.2]]))
 
 
+def test_accuracy():
+    scores = tensor([[0.1, 2.0, -1.0], [3.0, 0.0, 0.5], [0.2, 0.1, 0.9], [1.0, 1.0, 0.0]])
+    assert scores.accuracy([1, 0, 2, 0]) == 1.0
+    assert scores.accuracy([1, 0, 0, 1]) == 0.5
+    assert scores.accuracy(tensor([0, 1, 0, 1])) == 0.0
+    # same answer from logits and from probabilities
+    assert scores.softmax().accuracy([1, 2, 2, 0]) == scores.accuracy([1, 2, 2, 0]) == 0.75
+    assert tensor([0.3, 0.9]).accuracy([1]) == 1.0
+    assert raises(lambda: scores.accuracy([1, 0]), ValueError)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

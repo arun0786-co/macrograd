@@ -853,6 +853,21 @@ class tensor:
         out._backward = _backward
         return out
 
+    def accuracy(self, labels):
+        # fraction of rows whose highest score is at the right class. self holds one row
+        # of scores (logits or probabilities) per example, labels holds the right class
+        # for each row as an int. a plain number, not a tensor: it has no gradient
+        C = self.shape[-1] if self.shape else 1
+        rows = len(self.data) // C
+        labels = labels.data if isinstance(labels, tensor) else list(labels)
+        if len(labels) != rows:
+            raise ValueError(f"Got {len(labels)} labels for {rows} rows")
+        if rows == 0:
+            raise ValueError("accuracy needs at least one row")
+        predictions = self.argmax(axis=-1).data if self.shape else [0]
+        correct = sum(1 for p, label in zip(predictions, labels) if p == label)
+        return correct / rows
+
     def gelu(self):
         # tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
         k = 0.7978845608028654
