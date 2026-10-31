@@ -32,7 +32,8 @@ Macrograd goes further:
 
 **The Network (`nn`)**
 
-* `module`, `linear`, `MLP`, `dropout` classes.
+* `module`, `linear`, `MLP`, `sequential`, `dropout` classes.
+* `.parameters()` finds every tensor a module stores, including inside sub-modules and lists, so a custom layer only has to store its tensors. `sequential(layer, ...)` chains modules and plain functions.
 * Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
 * Per-layer activation functions (pass callables) and dropout rates.
 * Dropout layer with `.train()` and `.eval()` modes for training vs. inference.

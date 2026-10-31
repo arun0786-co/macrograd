@@ -14,28 +14,42 @@ class module:
             for i in range(len(p.data)):
                 p.grad[i] = 0.0
 
+    def children(self):
+        # sub-modules stored as attributes, or inside a list or tuple attribute,
+        # in the order they were assigned
+        for v in vars(self).values():
+            for item in (v if isinstance(v, (list, tuple)) else [v]):
+                if isinstance(item, module):
+                    yield item
+
     def parameters(self):
-        return []
+        # every tensor stored as an attribute (or in a list), plus the parameters of every
+        # sub-module, so a new layer only has to store its tensors. a tensor shared by two
+        # layers is listed once, so the optimizer doesn't update it twice per step
+        params, seen = [], set()
+        for v in vars(self).values():
+            for item in (v if isinstance(v, (list, tuple)) else [v]):
+                if isinstance(item, tensor):
+                    found = [item]
+                elif isinstance(item, module):
+                    found = item.parameters()
+                else:
+                    continue
+                for p in found:
+                    if id(p) not in seen:
+                        seen.add(id(p))
+                        params.append(p)
+        return params
     
     def train(self):
         self.training = True
-        for v in vars(self).values():
-            if isinstance(v, module):
-                v.train()
-            elif isinstance(v, list):
-                for item in v:
-                    if isinstance(item, module):
-                        item.train()
+        for child in self.children():
+            child.train()
     
     def eval(self):
         self.training = False
-        for v in vars(self).values():
-            if isinstance(v, module):
-                v.eval()
-            elif isinstance(v, list):
-                for item in v:
-                    if isinstance(item, module):
-                        item.eval()
+        for child in self.children():
+            child.eval()
     
 '''class neuron(module):
     def __init__(self, nin):
@@ -68,9 +82,6 @@ class linear(module):
     def __call__(self,x):
         out = x.matmul(self.w) + self.b
         return out
-    
-    def parameters(self):
-        return [self.w, self.b]
     
     def __repr__(self):
         return f"Linear(in_features={self.w.shape[0]}, out_features={self.w.shape[1]})"
@@ -126,16 +137,27 @@ class MLP(module):
         
         return out
 
-    def parameters(self):
-        params = []
-        for layer in self.layers:
-            params.extend(layer.parameters())
-        return params
-    
     def __repr__(self):
         lines = [f"  ({i}): {layer}" for i, layer in enumerate(self.layers)]
         return "MLP(\n" + "\n".join(lines) + "\n)"
     
+
+class sequential(module):
+    # runs layers one after another, each one's output going into the next.
+    # a layer can be a module or any function, like lambda x: x.relu()
+    def __init__(self, *layers):
+        super().__init__()
+        self.layers = list(layers)
+
+    def __call__(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+    def __repr__(self):
+        lines = [f"  ({i}): {layer}" for i, layer in enumerate(self.layers)]
+        return "Sequential(\n" + "\n".join(lines) + "\n)"
+
 
 class dropout(module):
     def __init__(self, p=0.5):
@@ -155,9 +177,6 @@ class dropout(module):
         out = x * mask
         out._op = 'dropout'
         return out
-    
-    def parameters(self):
-        return []
     
     def __repr__(self):
         return f"Dropout(p={self.p})"

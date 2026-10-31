@@ -2,7 +2,7 @@ import math
 import random
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, dropout, linear
+from nn import MLP, dropout, linear, module, sequential
 from optim import SGD
 
 
@@ -595,6 +595,63 @@ def test_accuracy():
     assert scores.softmax().accuracy([1, 2, 2, 0]) == scores.accuracy([1, 2, 2, 0]) == 0.75
     assert tensor([0.3, 0.9]).accuracy([1]) == 1.0
     assert raises(lambda: scores.accuracy([1, 0]), ValueError)
+
+
+def test_parameters_found_automatically():
+    random.seed(6)
+    layer = linear(3, 2)
+    assert layer.parameters() == [layer.w, layer.b]
+
+    mlp = MLP([3, 4, 1], dropout_p=0.5)
+    assert mlp.parameters() == [mlp.layers[0].w, mlp.layers[0].b, mlp.layers[1].w, mlp.layers[1].b]
+    assert dropout(0.5).parameters() == []
+
+    # a custom module only stores its tensors and layers
+    class scaled_linear(module):
+        def __init__(self):
+            super().__init__()
+            self.scale = tensor([2.0])
+            self.inner = linear(3, 2)
+
+        def __call__(self, x):
+            return self.inner(x) * self.scale
+
+    custom = scaled_linear()
+    assert custom.parameters() == [custom.scale, custom.inner.w, custom.inner.b]
+
+    # a layer used twice is listed once
+    shared = linear(2, 2)
+    assert sequential(shared, shared).parameters() == [shared.w, shared.b]
+
+
+def test_sequential():
+    random.seed(7)
+    first, second = linear(3, 4), linear(4, 2)
+    drop = dropout(0.5)
+    model = sequential(first, lambda x: x.relu(), drop, second)
+    assert model.parameters() == [first.w, first.b, second.w, second.b]
+
+    x = tensor([[0.5, -1.0, 2.0], [1.0, 0.3, -0.2]])
+    model.eval()
+    assert not drop.training
+    assert model(x).data == second(first(x).relu()).data
+    model.train()
+    assert drop.training
+
+    model.eval()
+    y = tensor([[1.0, 0.0], [0.0, 1.0]])
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+    model.train()
+    opt = SGD(model.parameters(), lr=0.1)
+    losses = []
+    for _ in range(30):
+        loss = sequential(first, lambda x: x.relu(), second)(x).mse_loss(y)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        losses.append(loss.data[0])
+    assert losses[-1] < losses[0]
 
 
 if __name__ == "__main__":
