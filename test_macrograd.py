@@ -654,6 +654,49 @@ def test_sequential():
     assert losses[-1] < losses[0]
 
 
+def test_sgd_momentum_and_weight_decay():
+    # one weight, gradient fixed at 1: velocity goes 1, 1.9, 2.71
+    w = tensor([0.0])
+    opt = SGD([w], lr=0.1, momentum=0.9)
+    expected, v = 0.0, 0.0
+    for _ in range(3):
+        w.grad = [1.0]
+        opt.step()
+        v = 0.9 * v + 1.0
+        expected -= 0.1 * v
+        assert close(w.data[0], expected)
+    assert close(opt.velocity[0][0], 2.71)
+
+    # with no gradient, weight decay alone shrinks the weight by (1 - lr * wd) each step
+    w = tensor([2.0, -4.0])
+    opt = SGD([w], lr=0.1, weight_decay=0.5)
+    for _ in range(4):
+        opt.zero_grad()
+        opt.step()
+    assert close(w.data[0], 2.0 * 0.95 ** 4) and close(w.data[1], -4.0 * 0.95 ** 4)
+
+    # defaults are plain sgd
+    w = tensor([1.0])
+    w.grad = [3.0]
+    SGD([w], lr=0.1).step()
+    assert close(w.data[0], 0.7)
+
+    assert raises(lambda: SGD([w], momentum=1.0), ValueError)
+    assert raises(lambda: SGD([w], weight_decay=-0.1), ValueError)
+
+    # momentum gets further than plain sgd on a long, shallow slope: f(w) = 0.01 * w^2
+    finals = []
+    for momentum in [0.0, 0.9]:
+        w = tensor([10.0])
+        opt = SGD([w], lr=0.5, momentum=momentum)
+        for _ in range(50):
+            opt.zero_grad()
+            ((w * w) * 0.01).sum().backward()
+            opt.step()
+        finals.append(abs(w.data[0]))
+    assert finals[1] < finals[0]
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:

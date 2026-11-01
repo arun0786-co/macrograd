@@ -40,7 +40,7 @@ Macrograd goes further:
 
 **The Optimizers (`optim`)**
 
-* `SGD` with manual learning rate control.
+* `SGD` with optional `momentum` and `weight_decay`.
 * `Adam` with per-parameter momentum and velocity tracking.
 
 ## 🚀 Quick Start

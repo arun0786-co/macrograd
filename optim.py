@@ -9,14 +9,26 @@ class optimizer:
                 p.grad[i] = 0.0
 
 class SGD(optimizer):
-    def __init__(self, parameters, lr=0.01):
+    # weight_decay adds weight_decay * w to each gradient, which pulls weights toward 0.
+    # momentum keeps a running velocity, v = momentum * v + g, and steps along v instead
+    # of g, so steps that keep pointing the same way build up speed and noisy ones cancel.
+    # momentum=0 and weight_decay=0 is plain SGD: w -= lr * g
+    def __init__(self, parameters, lr=0.01, momentum=0.0, weight_decay=0.0):
         super().__init__(parameters, lr)
+        if not 0 <= momentum < 1:
+            raise ValueError(f"momentum must be in [0, 1), got {momentum}")
+        if weight_decay < 0:
+            raise ValueError(f"weight_decay must be >= 0, got {weight_decay}")
+        self.momentum = momentum
+        self.weight_decay = weight_decay
+        self.velocity = [[0.0] * len(p.data) for p in self.parameters]
 
     def step(self):
-        for p in self.parameters:
+        for p, v in zip(self.parameters, self.velocity):
             for i in range(len(p.data)):
-              
-                p.data[i] -= self.lr * p.grad[i]
+                g = p.grad[i] + self.weight_decay * p.data[i]
+                v[i] = self.momentum * v[i] + g
+                p.data[i] -= self.lr * v[i]
 
 class Adam(optimizer):
     def __init__(self, parameters, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
