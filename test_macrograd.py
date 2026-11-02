@@ -3,7 +3,7 @@ import random
 
 from engine import tensor, concat, gradcheck
 from nn import MLP, dropout, linear, module, sequential
-from optim import SGD
+from optim import SGD, Adam, AdamW
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -695,6 +695,52 @@ def test_sgd_momentum_and_weight_decay():
             opt.step()
         finals.append(abs(w.data[0]))
     assert finals[1] < finals[0]
+
+
+def test_adamw():
+    # one step by hand: shrink 1.0 by (1 - 0.1 * 0.5), then the first Adam step moves
+    # by lr * g / (|g| + eps), which is almost exactly lr
+    w = tensor([1.0])
+    w.grad = [2.0]
+    AdamW([w], lr=0.1, weight_decay=0.5).step()
+    assert close(w.data[0], 0.95 - 0.1 * 2.0 / (2.0 + 1e-8))
+
+    # with no gradient, only the decay acts
+    w = tensor([2.0, -4.0])
+    opt = AdamW([w], lr=0.1, weight_decay=0.5)
+    for _ in range(4):
+        opt.zero_grad()
+        opt.step()
+    assert close(w.data[0], 2.0 * 0.95 ** 4) and close(w.data[1], -4.0 * 0.95 ** 4)
+
+    # decoupled: the decay is the same whatever the gradient's size. with L2 in the
+    # gradient, Adam would divide it away and a big gradient would hide the decay
+    moved = []
+    for g in [1.0, 1000.0]:
+        a, b = tensor([1.0]), tensor([1.0])
+        a.grad, b.grad = [g], [g]
+        AdamW([a], lr=0.1, weight_decay=0.5).step()
+        AdamW([b], lr=0.1, weight_decay=0.0).step()
+        moved.append(b.data[0] - a.data[0])
+    assert close(moved[0], moved[1]) and close(moved[0], 0.05)
+
+    # weight_decay=0 is exactly Adam
+    random.seed(8)
+    x, y = rand_tensor(4, 3), rand_tensor(4, 1)
+    finals = []
+    for opt_class in [Adam, lambda params, lr: AdamW(params, lr, weight_decay=0.0)]:
+        random.seed(9)
+        model = MLP([3, 4, 1])
+        opt = opt_class(model.parameters(), lr=0.05)
+        for _ in range(10):
+            loss = model(x).mse_loss(y)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        finals.append([v for p in model.parameters() for v in p.data])
+    assert finals[0] == finals[1]
+
+    assert raises(lambda: AdamW([w], weight_decay=-1.0), ValueError)
 
 
 if __name__ == "__main__":

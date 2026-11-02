@@ -42,6 +42,7 @@ Macrograd goes further:
 
 * `SGD` with optional `momentum` and `weight_decay`.
 * `Adam` with per-parameter momentum and velocity tracking.
+* `AdamW`: Adam with decoupled weight decay (shrinks weights directly instead of adding to the gradient).
 
 ## 🚀 Quick Start
 
