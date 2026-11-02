@@ -3,7 +3,7 @@ import random
 
 from engine import tensor, concat, gradcheck
 from nn import MLP, dropout, linear, module, sequential
-from optim import SGD, Adam, AdamW
+from optim import SGD, Adam, AdamW, clip_grad_norm
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -741,6 +741,34 @@ def test_adamw():
     assert finals[0] == finals[1]
 
     assert raises(lambda: AdamW([w], weight_decay=-1.0), ValueError)
+
+
+def test_clip_grad_norm():
+    # gradients (3, 4) and (12,) make one vector of length 13
+    a, b = tensor([1.0, 1.0]), tensor([1.0])
+    a.grad, b.grad = [3.0, 4.0], [12.0]
+    assert close(clip_grad_norm([a, b], max_norm=6.5), 13.0)
+    assert close(a.grad[0], 1.5) and close(a.grad[1], 2.0) and close(b.grad[0], 6.0)
+    new_norm = sum(g * g for g in a.grad + b.grad) ** 0.5
+    assert close(new_norm, 6.5)
+
+    # under the limit nothing changes
+    a.grad = [0.3, 0.4]
+    b.grad = [0.0]
+    assert close(clip_grad_norm([a, b], max_norm=1.0), 0.5)
+    assert a.grad == [0.3, 0.4] and b.grad == [0.0]
+
+    # works on a model after backward, and the next step uses the clipped grads
+    random.seed(10)
+    model = MLP([3, 4, 1])
+    x, y = rand_tensor(4, 3), tensor([[100.0], [-100.0], [100.0], [-100.0]])
+    model(x).mse_loss(y).backward()
+    before = clip_grad_norm(model.parameters(), max_norm=1.0)
+    assert before > 1.0
+    after = sum(g * g for p in model.parameters() for g in p.grad) ** 0.5
+    assert close(after, 1.0)
+
+    assert raises(lambda: clip_grad_norm([a], max_norm=0.0), ValueError)
 
 
 if __name__ == "__main__":

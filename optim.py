@@ -80,3 +80,21 @@ class AdamW(Adam):
             for i in range(len(p.data)):
                 p.data[i] *= 1 - self.lr * self.weight_decay
         super().step()
+
+
+def clip_grad_norm(parameters, max_norm):
+    # treats all the gradients as one long vector. if its length (L2 norm) is over max_norm,
+    # every gradient is scaled down by the same factor so the length becomes max_norm.
+    # the direction stays the same, only the step gets shorter, which stops one huge
+    # gradient from throwing the weights far away. call it after backward(), before step().
+    # returns the norm from before clipping, which is useful to print
+    if max_norm <= 0:
+        raise ValueError(f"max_norm must be > 0, got {max_norm}")
+    parameters = list(parameters)
+    total = sum(g * g for p in parameters for g in p.grad) ** 0.5
+    if total > max_norm:
+        scale = max_norm / total
+        for p in parameters:
+            for i in range(len(p.grad)):
+                p.grad[i] *= scale
+    return total

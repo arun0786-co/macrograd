@@ -43,6 +43,7 @@ Macrograd goes further:
 * `SGD` with optional `momentum` and `weight_decay`.
 * `Adam` with per-parameter momentum and velocity tracking.
 * `AdamW`: Adam with decoupled weight decay (shrinks weights directly instead of adding to the gradient).
+* `clip_grad_norm(parameters, max_norm)` scales all gradients down together when their combined length is over `max_norm`. Call it between `backward()` and `step()`.
 
 ## 🚀 Quick Start
 
