@@ -3,7 +3,7 @@ import random
 
 from engine import tensor, concat, gradcheck
 from nn import MLP, dropout, linear, module, sequential
-from optim import SGD, Adam, AdamW, clip_grad_norm
+from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -769,6 +769,50 @@ def test_clip_grad_norm():
     assert close(after, 1.0)
 
     assert raises(lambda: clip_grad_norm([a], max_norm=0.0), ValueError)
+
+
+def test_lr_schedules():
+    # step: halve every 3 epochs
+    opt = SGD([tensor([0.0])], lr=0.1)
+    sched = StepLR(opt, step_size=3, gamma=0.5)
+    lrs = [opt.lr]
+    for _ in range(9):
+        sched.step()
+        lrs.append(opt.lr)
+    for epoch, lr in enumerate(lrs):
+        assert close(lr, 0.1 * 0.5 ** (epoch // 3))
+    assert close(lrs[2], 0.1) and close(lrs[3], 0.05) and close(lrs[9], 0.0125)
+
+    # cosine: compare every epoch against math.cos, then check it stays at eta_min
+    opt = Adam([tensor([0.0])], lr=0.2)
+    sched = CosineAnnealingLR(opt, T_max=100, eta_min=0.01)
+    assert close(opt.lr, 0.2)
+    for epoch in range(1, 101):
+        sched.step()
+        expected = 0.01 + (0.2 - 0.01) * (1 + math.cos(math.pi * epoch / 100)) / 2
+        assert close(opt.lr, expected)
+        if epoch == 50:
+            assert close(opt.lr, (0.2 + 0.01) / 2)
+    assert close(opt.lr, 0.01)
+    for _ in range(5):
+        sched.step()
+        assert close(opt.lr, 0.01)
+
+    # the optimizer steps with the scheduled lr
+    w = tensor([0.0])
+    opt = SGD([w], lr=0.1)
+    sched = StepLR(opt, step_size=1, gamma=0.5)
+    for _ in range(3):
+        w.grad = [1.0]
+        opt.step()
+        sched.step()
+    assert close(w.data[0], -(0.1 + 0.05 + 0.025))
+
+    assert raises(lambda: StepLR(opt, step_size=0), ValueError)
+    assert raises(lambda: StepLR(opt, step_size=2.5), ValueError)
+    assert raises(lambda: StepLR(opt, step_size=2, gamma=0.0), ValueError)
+    assert raises(lambda: CosineAnnealingLR(opt, T_max=0), ValueError)
+    assert raises(lambda: CosineAnnealingLR(opt, T_max=10, eta_min=-0.1), ValueError)
 
 
 if __name__ == "__main__":

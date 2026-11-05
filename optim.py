@@ -98,3 +98,64 @@ def clip_grad_norm(parameters, max_norm):
             for i in range(len(p.grad)):
                 p.grad[i] *= scale
     return total
+
+PI = 3.141592653589793
+
+def _cos(x, terms=20):
+    # Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - ...
+    # each term is the one before times -x^2 / ((2n+1)(2n+2)).
+    # only used with x in [0, pi], where 20 terms are accurate to about 1e-15
+    result = 0.0
+    term = 1.0
+    for n in range(terms):
+        result += term
+        term *= -x * x / ((2 * n + 1) * (2 * n + 2))
+    return result
+
+
+class lr_scheduler:
+    # changes optimizer.lr as training goes on. call step() once per epoch, after
+    # optimizer.step(). each subclass gives the lr for an epoch number with lr_at(epoch).
+    # epoch 0 uses the lr the optimizer was made with
+    def __init__(self, optimizer):
+        self.optimizer = optimizer
+        self.base_lr = optimizer.lr
+        self.epoch = 0
+
+    def step(self):
+        self.epoch += 1
+        self.optimizer.lr = self.lr_at(self.epoch)
+
+class StepLR(lr_scheduler):
+    # multiplies the lr by gamma every step_size epochs: lr = base_lr * gamma ** (epoch // step_size)
+    # with lr=0.1, step_size=10, gamma=0.5 that is 0.1 for epochs 0-9, 0.05 for 10-19, ...
+    def __init__(self, optimizer, step_size, gamma=0.1):
+        if not isinstance(step_size, int) or step_size < 1:
+            raise ValueError(f"step_size must be an int >= 1, got {step_size}")
+        if gamma <= 0:
+            raise ValueError(f"gamma must be > 0, got {gamma}")
+        super().__init__(optimizer)
+        self.step_size = step_size
+        self.gamma = gamma
+
+    def lr_at(self, epoch):
+        return self.base_lr * self.gamma ** (epoch // self.step_size)
+
+class CosineAnnealingLR(lr_scheduler):
+    # lowers the lr from base_lr to eta_min along half a cosine wave over T_max epochs:
+    # lr = eta_min + (base_lr - eta_min) * (1 + cos(pi * epoch / T_max)) / 2
+    # cos goes from 1 to -1, so the lr starts at base_lr and ends at eta_min. it falls slowly
+    # at first, fastest in the middle, and slowly again at the end.
+    # after T_max epochs the lr stays at eta_min
+    def __init__(self, optimizer, T_max, eta_min=0.0):
+        if T_max <= 0:
+            raise ValueError(f"T_max must be > 0, got {T_max}")
+        if eta_min < 0:
+            raise ValueError(f"eta_min must be >= 0, got {eta_min}")
+        super().__init__(optimizer)
+        self.T_max = T_max
+        self.eta_min = eta_min
+
+    def lr_at(self, epoch):
+        epoch = min(epoch, self.T_max)
+        return self.eta_min + (self.base_lr - self.eta_min) * (1 + _cos(PI * epoch / self.T_max)) / 2
