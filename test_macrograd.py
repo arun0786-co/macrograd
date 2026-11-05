@@ -5,7 +5,7 @@ import random
 import tempfile
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, dropout, layer_norm, linear, module, sequential
+from nn import MLP, batch_norm, dropout, layer_norm, linear, module, sequential
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
 
@@ -937,6 +937,76 @@ def test_layer_norm():
     gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
 
     assert raises(lambda: norm(rand_tensor(3, 4)), ValueError)
+
+
+def test_batch_norm():
+    random.seed(14)
+    x = rand_tensor(6, 3) * 3.0 + 2.0
+    norm = batch_norm(3)
+    out = norm(x)
+
+    # training mode: each column is normalized with its own batch mean and variance
+    for j in range(3):
+        col = x.data[j::3]
+        mean = math.fsum(col) / 6
+        var = math.fsum((v - mean) ** 2 for v in col) / 6
+        for i in range(6):
+            assert close(out.data[3 * i + j], (col[i] - mean) / math.sqrt(var + 1e-5))
+        # running stats start at 0 and 1 and move 10% of the way to the batch values,
+        # using the unbiased variance (divide by 5 instead of 6)
+        assert close(norm.running_mean.data[j], 0.1 * mean)
+        assert close(norm.running_var.data[j], 0.9 + 0.1 * var * 6 / 5)
+
+    # after many steps on the same batch the running stats reach the batch values
+    for _ in range(300):
+        norm(x)
+    for j in range(3):
+        col = x.data[j::3]
+        mean = math.fsum(col) / 6
+        assert close(norm.running_mean.data[j], mean, rel=1e-9, abs_tol=1e-12)
+        assert close(norm.running_var.data[j], math.fsum((v - mean) ** 2 for v in col) / 5)
+
+    # eval mode uses the running stats, works on one row and leaves the stats alone
+    norm.gamma.data = [2.0, 0.5, 1.0]
+    norm.beta.data = [0.1, -0.2, 0.3]
+    norm.eval()
+    stats = norm.running_mean.data[:], norm.running_var.data[:]
+    one = tensor([[1.0, -1.0, 0.5]])
+    out = norm(one)
+    for j in range(3):
+        expected = (one.data[j] - stats[0][j]) / math.sqrt(stats[1][j] + 1e-5)
+        assert close(out.data[j], expected * norm.gamma.data[j] + norm.beta.data[j])
+    assert (norm.running_mean.data, norm.running_var.data) == stats
+
+    # gradients, in both modes. in training, every input also moves the batch mean and var
+    y = rand_tensor(6, 3)
+    gradcheck(lambda a, gamma, beta: norm(a).mse_loss(y), x, norm.gamma, norm.beta)
+    norm.train()
+    gradcheck(lambda a, gamma, beta: norm(a).mse_loss(y), x, norm.gamma, norm.beta)
+    model = sequential(linear(3, 4), batch_norm(4), lambda h: h.relu(), linear(4, 3))
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+    # running stats are buffers: saved and loaded, but never given to the optimizer
+    assert norm.parameters() == [norm.gamma, norm.beta]
+    assert [name for name, _ in model.named_buffers()] == ["layers.1.running_mean", "layers.1.running_var"]
+    stats = norm.running_mean.data[:], norm.running_var.data[:]
+    opt = AdamW(norm.parameters(), lr=0.1, weight_decay=0.5)
+    opt.step()
+    assert (norm.running_mean.data, norm.running_var.data) == stats
+
+    model.eval()
+    copy = sequential(linear(3, 4), batch_norm(4), lambda h: h.relu(), linear(4, 3))
+    copy.eval()
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "weights.json")
+        model.save(path)
+        copy.load(path)
+    assert copy.layers[1].running_var.data == model.layers[1].running_var.data
+    assert copy(x).data == model(x).data
+
+    assert raises(lambda: norm(tensor([[1.0, 2.0, 3.0]])), ValueError)
+    assert raises(lambda: norm(rand_tensor(4, 2)), ValueError)
+    assert raises(lambda: batch_norm(3, momentum=1.5), ValueError)
 
 
 if __name__ == "__main__":

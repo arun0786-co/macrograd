@@ -23,13 +23,18 @@ class module:
                 if isinstance(item, module):
                     yield item
 
-    def named_parameters(self):
-        # every tensor stored as an attribute (or in a list), plus the parameters of every
-        # sub-module, so a new layer only has to store its tensors. each one is named by
-        # where it is stored: 'layers.0.w' is the w of the first module in self.layers.
-        # a tensor shared by two layers is listed once, under the first name found, so the
-        # optimizer doesn't update it twice per step
-        params, seen = [], set()
+    # names of tensor attributes that hold running state instead of weights, like
+    # batch_norm's running mean. parameters() leaves them out, so the optimizer never
+    # changes them, but save() and load() include them
+    buffer_names = ()
+
+    def _named_tensors(self, buffers):
+        # every tensor stored as an attribute (or in a list), plus those of every sub-module,
+        # so a new layer only has to store its tensors. each one is named by where it is
+        # stored: 'layers.0.w' is the w of the first module in self.layers. a tensor shared
+        # by two layers is listed once, under the first name found, so the optimizer doesn't
+        # update it twice per step. buffers picks the buffers instead of the parameters
+        found_all, seen = [], set()
         for attr, v in vars(self).items():
             if isinstance(v, (list, tuple)):
                 items = [(f"{attr}.{i}", item) for i, item in enumerate(v)]
@@ -37,44 +42,53 @@ class module:
                 items = [(attr, v)]
             for name, item in items:
                 if isinstance(item, tensor):
+                    if (attr in self.buffer_names) != buffers:
+                        continue
                     found = [(name, item)]
                 elif isinstance(item, module):
-                    found = [(f"{name}.{sub}", p) for sub, p in item.named_parameters()]
+                    found = [(f"{name}.{sub}", t) for sub, t in item._named_tensors(buffers)]
                 else:
                     continue
-                for full_name, p in found:
-                    if id(p) not in seen:
-                        seen.add(id(p))
-                        params.append((full_name, p))
-        return params
+                for full_name, t in found:
+                    if id(t) not in seen:
+                        seen.add(id(t))
+                        found_all.append((full_name, t))
+        return found_all
+
+    def named_parameters(self):
+        return self._named_tensors(buffers=False)
 
     def parameters(self):
         return [p for _, p in self.named_parameters()]
 
+    def named_buffers(self):
+        return self._named_tensors(buffers=True)
+
     def save(self, path):
-        # writes every parameter to a JSON file as {name: {"shape": [...], "data": [...]}}.
+        # writes every parameter and buffer to a JSON file as {name: {"shape": [...], "data": [...]}}.
         # json writes floats with enough digits to read back the exact same number
-        state = {name: {"shape": list(p.shape), "data": p.data} for name, p in self.named_parameters()}
+        tensors = self.named_parameters() + self.named_buffers()
+        state = {name: {"shape": list(t.shape), "data": t.data} for name, t in tensors}
         with open(path, "w") as f:
             json.dump(state, f)
 
     def load(self, path):
-        # reads a file written by save() into this module's parameters. every name and shape
-        # must match, so loading weights into a different model fails loudly. the values are
-        # copied into the existing tensors, so an optimizer holding them keeps working
+        # reads a file written by save() into this module's parameters and buffers. every
+        # name and shape must match, so loading weights into a different model fails loudly.
+        # the values are copied into the existing tensors, so an optimizer holding them keeps working
         with open(path) as f:
             state = json.load(f)
-        params = dict(self.named_parameters())
-        missing = [name for name in params if name not in state]
-        unexpected = [name for name in state if name not in params]
+        tensors = dict(self.named_parameters() + self.named_buffers())
+        missing = [name for name in tensors if name not in state]
+        unexpected = [name for name in state if name not in tensors]
         if missing or unexpected:
             raise ValueError(f"Weights don't match the model: missing {missing}, unexpected {unexpected}")
-        for name, p in params.items():
+        for name, t in tensors.items():
             shape = tuple(state[name]["shape"])
-            if shape != p.shape or len(state[name]["data"]) != len(p.data):
-                raise ValueError(f"{name} has shape {shape} in the file but {p.shape} in the model")
-        for name, p in params.items():
-            p.data[:] = [float(v) for v in state[name]["data"]]
+            if shape != t.shape or len(state[name]["data"]) != len(t.data):
+                raise ValueError(f"{name} has shape {shape} in the file but {t.shape} in the model")
+        for name, t in tensors.items():
+            t.data[:] = [float(v) for v in state[name]["data"]]
     
     def train(self):
         self.training = True
@@ -211,6 +225,56 @@ class layer_norm(module):
 
     def __repr__(self):
         return f"LayerNorm({self.gamma.shape[0]}, eps={self.eps})"
+
+
+class batch_norm(module):
+    # normalizes each feature over the batch: every column of an (N, C) input gets the
+    # batch mean of that column subtracted and is divided by the batch std, then scaled by
+    # gamma and shifted by beta (learned, one per feature). unlike layer_norm, an example's
+    # output depends on the other examples in its batch.
+    # a test batch may hold a single example, so training also keeps running averages,
+    #   running = (1 - momentum) * running + momentum * batch value,
+    # and eval() mode normalizes with those instead. the running variance is updated with
+    # the unbiased batch variance (divided by N - 1 instead of N), like pytorch does
+    buffer_names = ("running_mean", "running_var")
+
+    def __init__(self, dim, momentum=0.1, eps=1e-5):
+        super().__init__()
+        if not 0 <= momentum <= 1:
+            raise ValueError(f"momentum must be in [0, 1], got {momentum}")
+        self.momentum = momentum
+        self.eps = eps
+        self.gamma = tensor([1.0] * dim)
+        self.beta = tensor([0.0] * dim)
+        self.running_mean = tensor([0.0] * dim)
+        self.running_var = tensor([1.0] * dim)
+
+    def __call__(self, x):
+        C = self.gamma.shape[0]
+        if len(x.shape) != 2 or x.shape[1] != C:
+            raise ValueError(f"batch_norm expects shape (N, {C}), got {x.shape}")
+        if self.training:
+            N = x.shape[0]
+            if N < 2:
+                raise ValueError("batch_norm needs at least 2 rows in training mode")
+            # built from mean and var, so backward comes from their gradients,
+            # including the path through the batch statistics
+            mean = x.mean(axis=0, keepdim=True)
+            var = x.var(axis=0, keepdim=True)
+            m = self.momentum
+            for j in range(C):
+                self.running_mean.data[j] = (1 - m) * self.running_mean.data[j] + m * mean.data[j]
+                unbiased = var.data[j] * N / (N - 1)
+                self.running_var.data[j] = (1 - m) * self.running_var.data[j] + m * unbiased
+        else:
+            # copies, so the running stats stay out of the graph
+            mean = tensor(self.running_mean.data, shape=(1, C))
+            var = tensor(self.running_var.data, shape=(1, C))
+        x_hat = (x - mean) * (var + self.eps) ** -0.5
+        return x_hat * self.gamma + self.beta
+
+    def __repr__(self):
+        return f"BatchNorm({self.gamma.shape[0]}, momentum={self.momentum}, eps={self.eps})"
 
 
 class dropout(module):
