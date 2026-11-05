@@ -5,7 +5,7 @@ import random
 import tempfile
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rnn_cell, sequential
+from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
@@ -1412,10 +1412,28 @@ def test_linear_with_leading_dims():
     assert raises(lambda: layer(rand_shape(2, 5, 3)), ValueError)
 
 
+def ref_project(layer, rows):
+    return [[math.fsum(r[i] * layer.w.get_element(i, j) for i in range(len(r))) + layer.b.data[j]
+             for j in range(layer.w.shape[1])] for r in rows]
+
+
+def ref_mha(mha, rows, causal):
+    # one sequence, a list of rows: project by hand, attend in each head's slice of the
+    # features, put the heads side by side and project again
+    H = mha.num_heads
+    head_dim = len(rows[0]) // H
+    q, k, v = ref_project(mha.q_proj, rows), ref_project(mha.k_proj, rows), ref_project(mha.v_proj, rows)
+    heads = []
+    for h in range(H):
+        cut = lambda m: tensor([r[h * head_dim:(h + 1) * head_dim] for r in m])
+        heads.append(ref_attention(cut(q), cut(k), cut(v), causal))
+    merged = [[heads[h][t * head_dim + c] for h in range(H) for c in range(head_dim)] for t in range(len(rows))]
+    return ref_project(mha.out_proj, merged)
+
+
 def test_multi_head_attention():
     random.seed(26)
     B, T, D, H = 2, 4, 6, 3
-    head_dim = D // H
     mha = multi_head_attention(D, num_heads=H)
     assert [name for name, _ in mha.named_parameters()] == [
         f"{proj}.{p}" for proj in ["q_proj", "k_proj", "v_proj", "out_proj"] for p in ["w", "b"]]
@@ -1423,25 +1441,13 @@ def test_multi_head_attention():
         p.data = [random.uniform(-1, 1) for _ in p.data]
     x = rand_shape(B, T, D)
 
-    def project(layer, rows):
-        return [[math.fsum(r[i] * layer.w.get_element(i, j) for i in range(len(r))) + layer.b.data[j]
-                 for j in range(layer.w.shape[1])] for r in rows]
-
-    # reference: project each sequence by hand, attend in each head's slice of the features,
-    # put the heads side by side and project again
     outputs = {}
     for causal in [False, True]:
         out = mha(x, causal=causal)
         assert out.shape == (B, T, D)
         for b in range(B):
             rows = [[x.get_element(b, t, c) for c in range(D)] for t in range(T)]
-            q, k, v = project(mha.q_proj, rows), project(mha.k_proj, rows), project(mha.v_proj, rows)
-            heads = []
-            for h in range(H):
-                cut = lambda m: tensor([r[h * head_dim:(h + 1) * head_dim] for r in m])
-                heads.append(ref_attention(cut(q), cut(k), cut(v), causal))
-            merged = [[heads[h][t * head_dim + c] for h in range(H) for c in range(head_dim)] for t in range(T)]
-            expected = project(mha.out_proj, merged)
+            expected = ref_mha(mha, rows, causal)
             for t in range(T):
                 for c in range(D):
                     assert close(out.get_element(b, t, c), expected[t][c], abs_tol=1e-12)
@@ -1464,6 +1470,93 @@ def test_multi_head_attention():
         gradcheck(lambda a, *params: small(a, causal).mse_loss(y), x, *small.parameters())
 
     assert raises(lambda: multi_head_attention(6, num_heads=4), ValueError)
+    assert raises(lambda: small(rand_shape(3, 4)), ValueError)
+    assert raises(lambda: small(rand_shape(2, 3, 5)), ValueError)
+
+
+def ref_layer_norm(ln, rows):
+    out = []
+    for r in rows:
+        mean = math.fsum(r) / len(r)
+        std = math.sqrt(math.fsum((v - mean) ** 2 for v in r) / len(r) + ln.eps)
+        out.append([(v - mean) / std * ln.gamma.data[j] + ln.beta.data[j] for j, v in enumerate(r)])
+    return out
+
+
+def test_transformer_block():
+    random.seed(32)
+    B, T, D, H = 2, 4, 6, 2
+    block = transformer_block(D, num_heads=H, hidden=8)
+    assert [name for name, _ in block.named_parameters()] == (
+        ["ln1.gamma", "ln1.beta"]
+        + [f"attn.{proj}.{p}" for proj in ["q_proj", "k_proj", "v_proj", "out_proj"] for p in ["w", "b"]]
+        + ["ln2.gamma", "ln2.beta"]
+        + [f"mlp.layers.{i}.{p}" for i in range(2) for p in ["w", "b"]])
+    assert block.mlp.layers[0].w.shape == (6, 8)
+    assert transformer_block(8, num_heads=2).mlp.layers[0].w.shape == (8, 32)
+    for p in block.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+    x = rand_shape(B, T, D)
+
+    k = math.sqrt(2 / math.pi)
+    gelu = lambda v: 0.5 * v * (1 + math.tanh(k * (v + 0.044715 * v ** 3)))
+    add = lambda m, n: [[u + w for u, w in zip(r, s)] for r, s in zip(m, n)]
+
+    # reference for one sequence, both residual steps written out by hand
+    def ref_block(rows, causal):
+        rows = add(rows, ref_mha(block.attn, ref_layer_norm(block.ln1, rows), causal))
+        hidden = ref_project(block.mlp.layers[0], ref_layer_norm(block.ln2, rows))
+        return add(rows, ref_project(block.mlp.layers[1], [[gelu(v) for v in r] for r in hidden]))
+
+    outputs = {}
+    for causal in [False, True]:
+        out = block(x, causal=causal)
+        assert out.shape == (B, T, D)
+        for b in range(B):
+            rows = [[x.get_element(b, t, c) for c in range(D)] for t in range(T)]
+            expected = ref_block(rows, causal)
+            for t in range(T):
+                for c in range(D):
+                    assert close(out.get_element(b, t, c), expected[t][c], abs_tol=1e-12)
+        outputs[causal] = out
+
+    # causal: the mlp works on each position alone, so changing the last position still
+    # can't reach the outputs before it. the change differs per feature, since layer norm
+    # would erase the same shift added to every feature
+    later = tensor(x.data[:], shape=x.shape)
+    for b in range(B):
+        for c in range(D):
+            later.data[(b * T + T - 1) * D + c] += random.uniform(-1, 1)
+    changed = block(later, causal=True)
+    for b in range(B):
+        assert changed[b, :T - 1].data == outputs[True][b, :T - 1].data
+        assert changed[b, T - 1].data != outputs[True][b, T - 1].data
+    assert block(later)[0, 0].data != outputs[False][0, 0].data
+
+    # with the last weights of both sub-layers at zero they add nothing: the block passes x
+    # through unchanged and the gradient reaches x along the residual path alone. the zeroed
+    # weights still get gradients, so training can move them away from zero
+    for layer in [block.attn.out_proj, block.mlp.layers[1]]:
+        layer.w.data = [0.0] * len(layer.w.data)
+        layer.b.data = [0.0] * len(layer.b.data)
+    x = rand_shape(B, T, D)
+    out = block(x, causal=True)
+    assert out.data == x.data
+    out.sum().backward()
+    assert x.grad == [1.0] * len(x.data)
+    assert any(g != 0 for g in block.attn.out_proj.w.grad)
+    assert any(g != 0 for g in block.mlp.layers[1].w.grad)
+
+    small = transformer_block(4, num_heads=2, hidden=6)
+    for p in small.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+    x, y = rand_shape(2, 3, 4), rand_shape(2, 3, 4)
+    for causal in [False, True]:
+        gradcheck(lambda a, *params: small(a, causal).mse_loss(y), x, *small.parameters())
+
+    assert raises(lambda: transformer_block(4, num_heads=3), ValueError)
+    for bad in [0, -1, 2.5, True]:
+        assert raises(lambda: transformer_block(4, num_heads=2, hidden=bad), ValueError)
     assert raises(lambda: small(rand_shape(3, 4)), ValueError)
     assert raises(lambda: small(rand_shape(2, 3, 5)), ValueError)
 

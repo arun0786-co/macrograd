@@ -35,7 +35,7 @@ Macrograd goes further:
 
 **The Network (`nn`)**
 
-* `module`, `linear`, `conv2d`, `max_pool2d`, `flatten`, `rnn_cell`, `multi_head_attention`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
+* `module`, `linear`, `conv2d`, `max_pool2d`, `flatten`, `rnn_cell`, `multi_head_attention`, `transformer_block`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
 * `conv2d(in_channels, out_channels, kernel_size, stride, padding)` holds square filters and one bias per filter.
 * `max_pool2d(kernel_size)` and `flatten()` (keeps the batch dim) wrap the tensor ops as layers, so `sequential(conv2d(1, 8, 3, padding=1), lambda x: x.relu(), max_pool2d(2), flatten(), linear(...))` is a small CNN.
 * `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
@@ -47,6 +47,7 @@ Macrograd goes further:
 * Per-layer activation functions (pass callables) and dropout rates.
 * `scaled_dot_product_attention(q, k, v, causal=False)` computes `softmax(q @ k^T / sqrt(d)) @ v` over any leading (batch, head) dims. With `causal=True`, position `i` only sees positions `0..i`.
 * `multi_head_attention(dim, num_heads)` is self-attention for `(B, T, dim)` inputs: it projects to queries, keys and values, splits them into heads that attend separately, then joins the heads and projects again. Call it as `mha(x, causal=True)` for a model that must not look ahead.
+* `transformer_block(dim, num_heads, hidden=4 * dim)` is one GPT-style layer for `(B, T, dim)` inputs: `x = x + attn(ln1(x))`, then `x = x + mlp(ln2(x))`, where the MLP widens each position to `hidden` features with gelu. The residual `x +` paths give the gradient a direct route back, and the output keeps the input's shape, so blocks stack: `for block in blocks: x = block(x, causal=True)`.
 * `rnn_cell(input_size, hidden_size)` is one step of a recurrent network, `h = tanh(x @ w_x + h @ w_h + b)`. Call it in a loop over a sequence, passing the hidden state along; backprop through time comes from the graph.
 * `embedding(num_embeddings, dim)` is a learned table with one vector per id. Pass integer ids of any shape and get their vectors back, shape `ids.shape + (dim,)`.
 * Dropout layer with `.train()` and `.eval()` modes for training vs. inference.

@@ -424,6 +424,37 @@ class multi_head_attention(module):
         return f"MultiHeadAttention(dim={self.q_proj.w.shape[0]}, num_heads={self.num_heads})"
 
 
+class transformer_block(module):
+    # one layer of a GPT-style transformer, for x of shape (B, T, dim):
+    #   x = x + attn(ln1(x))    positions pass information to each other
+    #   x = x + mlp(ln2(x))     each position works on what it gathered, on its own
+    # the mlp widens every position to hidden features (4 * dim by default), applies gelu
+    # and narrows back to dim.
+    # the "x +" paths are residual connections. each sub-layer only adds a change to x,
+    # and since d(x + f(x))/dx = 1 + df/dx, the gradient always has a direct route back to
+    # the input, so many blocks can be stacked and still train. layer norm comes before
+    # each sub-layer (pre-norm, as in GPT-2), so the residual path itself is never
+    # normalized. the output has the same shape as x, ready for the next block.
+    # built from existing layers, so backward comes from their ops
+    def __init__(self, dim, num_heads, hidden=None):
+        super().__init__()
+        hidden = 4 * dim if hidden is None else hidden
+        if isinstance(hidden, bool) or not isinstance(hidden, int) or hidden < 1:
+            raise ValueError(f"hidden must be an int >= 1, got {hidden!r}")
+        self.ln1 = layer_norm(dim)
+        self.attn = multi_head_attention(dim, num_heads)
+        self.ln2 = layer_norm(dim)
+        self.mlp = MLP([dim, hidden, dim], activation_fns=[lambda x: x.gelu()])
+
+    def __call__(self, x, causal=False):
+        x = x + self.attn(self.ln1(x), causal)
+        return x + self.mlp(self.ln2(x))
+
+    def __repr__(self):
+        return (f"TransformerBlock(dim={self.ln1.gamma.shape[0]}, num_heads={self.attn.num_heads}, "
+                f"hidden={self.mlp.layers[0].w.shape[1]})")
+
+
 class embedding(module):
     # a lookup table with one learned vector (row) per id, for tokens or categories.
     # given integer ids of any shape, returns their rows, shape ids.shape + (dim,).
