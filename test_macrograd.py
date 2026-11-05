@@ -5,7 +5,7 @@ import random
 import tempfile
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, sequential
+from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, rnn_cell, sequential
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
@@ -1261,6 +1261,64 @@ def test_max_pool2d_and_flatten():
     assert raises(lambda: rand_shape(1, 1, 2, 2).max_pool2d(3), ValueError)
     assert raises(lambda: rand_shape(1, 1, 4, 4).max_pool2d(2, stride=0), ValueError)
     assert raises(lambda: x.flatten(4), IndexError)
+
+
+def test_rnn_cell():
+    random.seed(22)
+    cell = rnn_cell(3, 4)
+    assert [name for name, _ in cell.named_parameters()] == ["w_x", "w_h", "b"]
+    cell.b.data = [random.uniform(-1, 1) for _ in range(4)]
+
+    x, h = rand_tensor(2, 3), rand_tensor(2, 4)
+    out = cell(x, h)
+    assert out.shape == (2, 4)
+    for n in range(2):
+        for j in range(4):
+            pre = (math.fsum(x.get_element(n, i) * cell.w_x.get_element(i, j) for i in range(3))
+                   + math.fsum(h.get_element(n, k) * cell.w_h.get_element(k, j) for k in range(4))
+                   + cell.b.data[j])
+            assert close(out.get_element(n, j), math.tanh(pre))
+    assert cell(x).data == cell(x, tensor([0.0] * 8, shape=(2, 4))).data
+
+    # backprop through time: grads for the shared weights and for every input, 4 steps back
+    def run(*sequence):
+        h = None
+        for x_t in sequence:
+            h = cell(x_t, h)
+        return h
+
+    sequence = [rand_tensor(2, 3) for _ in range(4)]
+    y = rand_tensor(2, 4)
+    gradcheck(lambda *params: run(*sequence).mse_loss(y), *cell.parameters())
+    gradcheck(lambda *inputs: run(*inputs).mse_loss(y), *sequence)
+    assert any(g != 0.0 for g in sequence[0].grad)
+
+    # needs memory: read 6 random +-1 values and say at the end what the first one was.
+    # the first value only reaches the output through the hidden state, step after step
+    def make(n):
+        rows = [[random.choice([-1.0, 1.0]) for _ in range(6)] for _ in range(n)]
+        return [tensor([[r[t]] for r in rows]) for t in range(6)], [int(r[0] > 0) for r in rows]
+
+    random.seed(23)
+    cell, head = rnn_cell(1, 8), linear(8, 2)
+    opt = Adam(cell.parameters() + head.parameters(), lr=0.05)
+    for _ in range(100):
+        inputs, labels = make(32)
+        h = None
+        for x_t in inputs:
+            h = cell(x_t, h)
+        loss = head(h).log_softmax().nll_loss(labels)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    inputs, labels = make(200)
+    h = None
+    for x_t in inputs:
+        h = cell(x_t, h)
+    assert head(h).accuracy(labels) == 1.0
+
+    assert raises(lambda: rnn_cell(3, 4)(rand_tensor(2, 2)), ValueError)
+    assert raises(lambda: rnn_cell(3, 4)(rand_tensor(2, 3), rand_tensor(3, 4)), ValueError)
 
 
 if __name__ == "__main__":

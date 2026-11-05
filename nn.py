@@ -313,6 +313,40 @@ class flatten(module):
         return f"Flatten(start_dim={self.start_dim})"
 
 
+class rnn_cell(module):
+    # one step of a plain recurrent network. it reads one input x_t (N, input_size) and the
+    # hidden state from the step before (N, hidden_size), and returns the next hidden state:
+    #   h_t = tanh(x_t @ w_x + h_(t-1) @ w_h + b)
+    # the hidden state is the network's memory of everything it has read so far. the same
+    # weights are used at every step, so a sequence is read with a plain loop:
+    #   h = None
+    #   for x_t in sequence:
+    #       h = cell(x_t, h)
+    # backward through the loop (backprop through time) needs nothing extra: every step adds
+    # nodes to the graph, and the shared weights collect grads from all the steps
+    def __init__(self, input_size, hidden_size):
+        super().__init__()
+        # uniform(-1/sqrt(hidden_size), 1/sqrt(hidden_size)) weights, like pytorch
+        bound = hidden_size ** -0.5
+        self.w_x = tensor([[random.uniform(-bound, bound) for _ in range(hidden_size)] for _ in range(input_size)])
+        self.w_h = tensor([[random.uniform(-bound, bound) for _ in range(hidden_size)] for _ in range(hidden_size)])
+        self.b = tensor([[0.0] * hidden_size])
+
+    def __call__(self, x, h=None):
+        input_size, hidden_size = self.w_x.shape
+        if len(x.shape) != 2 or x.shape[1] != input_size:
+            raise ValueError(f"rnn_cell expects input shape (N, {input_size}), got {x.shape}")
+        if h is None:
+            # nothing read yet: start from zeros
+            h = tensor([0.0] * (x.shape[0] * hidden_size), shape=(x.shape[0], hidden_size))
+        if h.shape != (x.shape[0], hidden_size):
+            raise ValueError(f"rnn_cell expects hidden shape ({x.shape[0]}, {hidden_size}), got {h.shape}")
+        return (x @ self.w_x + h @ self.w_h + self.b).tanh()
+
+    def __repr__(self):
+        return f"RNNCell({self.w_x.shape[0]}, {self.w_x.shape[1]})"
+
+
 class embedding(module):
     # a lookup table with one learned vector (row) per id, for tokens or categories.
     # given integer ids of any shape, returns their rows, shape ids.shape + (dim,).
