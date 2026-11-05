@@ -44,6 +44,7 @@ Macrograd goes further:
 * Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
 * `xavier_uniform`, `xavier_normal` (for tanh and sigmoid) and `kaiming_uniform`, `kaiming_normal` (for relu) re-initialize a linear or conv2d weight in place, like `kaiming_normal(layer.w)`, so activations keep their size through deep networks.
 * Per-layer activation functions (pass callables) and dropout rates.
+* `scaled_dot_product_attention(q, k, v, causal=False)` computes `softmax(q @ k^T / sqrt(d)) @ v` over any leading (batch, head) dims. With `causal=True`, position `i` only sees positions `0..i`.
 * `rnn_cell(input_size, hidden_size)` is one step of a recurrent network, `h = tanh(x @ w_x + h @ w_h + b)`. Call it in a loop over a sequence, passing the hidden state along; backprop through time comes from the graph.
 * `embedding(num_embeddings, dim)` is a learned table with one vector per id. Pass integer ids of any shape and get their vectors back, shape `ids.shape + (dim,)`.
 * Dropout layer with `.train()` and `.eval()` modes for training vs. inference.

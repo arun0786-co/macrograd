@@ -190,6 +190,39 @@ def kaiming_normal(w, negative_slope=0.0):
     return _fill(w, (2.0 / ((1 + negative_slope ** 2) * fan_in)) ** 0.5, normal=True)
 
 
+def scaled_dot_product_attention(q, k, v, causal=False):
+    # every query row scores every key row with a dot product, turns the scores into
+    # weights with softmax, and returns the weighted average of the value rows:
+    #   attention(q, k, v) = softmax(q @ k^T / sqrt(d)) @ v
+    # q is (..., T_q, d), k is (..., T_k, d) and v is (..., T_k, d_v); the output is
+    # (..., T_q, d_v), one averaged value row per query. the leading dims (batch, heads)
+    # must match.
+    # why sqrt(d): a dot product of d random terms grows like sqrt(d), and big scores push
+    # softmax towards a single 1 and zeros, where its gradients almost vanish.
+    # causal=True lets position i look only at positions 0..i, for models that predict the
+    # next token and must not see it: the scores for later positions get -inf added, so
+    # softmax gives them weight exactly 0. position i can always see itself, so no row is
+    # left with nothing to attend to.
+    # built from matmul, transpose, softmax and +, so backward comes from those ops
+    if len(q.shape) < 2 or len(k.shape) < 2 or len(v.shape) < 2:
+        raise ValueError(f"attention needs q, k, v with at least 2 dims, got {q.shape}, {k.shape}, {v.shape}")
+    if not q.shape[:-2] == k.shape[:-2] == v.shape[:-2]:
+        raise ValueError(f"q, k, v need the same leading dims, got {q.shape}, {k.shape}, {v.shape}")
+    if q.shape[-1] != k.shape[-1] or k.shape[-2] != v.shape[-2]:
+        raise ValueError(f"q and k need the same last dim, and k and v the same number of rows, "
+                         f"got {q.shape}, {k.shape}, {v.shape}")
+    d = q.shape[-1]
+    scores = (q @ k.transpose()) * (d ** -0.5)
+    if causal:
+        T = q.shape[-2]
+        if k.shape[-2] != T:
+            raise ValueError(f"causal attention needs as many queries as keys, got {T} and {k.shape[-2]}")
+        # (T, T), broadcast over the leading dims
+        mask = tensor([[float("-inf") if j > i else 0.0 for j in range(T)] for i in range(T)])
+        scores = scores + mask
+    return scores.softmax() @ v
+
+
 class MLP(module):
     def __init__(self, layer_sizes, activation_fns=None, dropout_p=None):
         super().__init__()

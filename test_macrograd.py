@@ -6,7 +6,7 @@ import tempfile
 
 from engine import tensor, concat, gradcheck
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, rnn_cell, sequential
-from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal
+from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
 
@@ -1319,6 +1319,78 @@ def test_rnn_cell():
 
     assert raises(lambda: rnn_cell(3, 4)(rand_tensor(2, 2)), ValueError)
     assert raises(lambda: rnn_cell(3, 4)(rand_tensor(2, 3), rand_tensor(3, 4)), ValueError)
+
+
+def ref_attention(q, k, v, causal):
+    # one query row at a time, with math.exp
+    T_q, d = q.shape
+    T_k, d_v = v.shape
+    out = []
+    for i in range(T_q):
+        visible = range(i + 1) if causal else range(T_k)
+        scores = [math.fsum(q.get_element(i, c) * k.get_element(j, c) for c in range(d)) / math.sqrt(d)
+                  for j in visible]
+        top = max(scores)
+        weights = [math.exp(s - top) for s in scores]
+        total = math.fsum(weights)
+        out += [math.fsum(w * v.get_element(j, c) for w, j in zip(weights, visible)) / total for c in range(d_v)]
+    return out
+
+
+def test_scaled_dot_product_attention():
+    random.seed(24)
+    q, k, v = rand_shape(3, 4, low=-2, high=2), rand_shape(5, 4, low=-2, high=2), rand_shape(5, 2)
+    out = scaled_dot_product_attention(q, k, v)
+    assert out.shape == (3, 2)
+    assert all(close(a, b) for a, b in zip(out.data, ref_attention(q, k, v, causal=False)))
+
+    # keys that all look the same get equal weight, so the output is the mean value row
+    same_keys = tensor([[1.0, 0.5, -1.0, 2.0]] * 5)
+    for row in range(3):
+        for c in range(2):
+            mean = math.fsum(v.get_element(j, c) for j in range(5)) / 5
+            assert close(scaled_dot_product_attention(q, same_keys, v).get_element(row, c), mean)
+    # a query that matches one key far better than the rest copies that key's value
+    keys = tensor([[10.0, 0.0], [0.0, 10.0], [-10.0, 0.0]])
+    values = tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    picked = scaled_dot_product_attention(tensor([[0.0, 10.0]]), keys, values)
+    assert abs(picked.data[0] - 3.0) < 1e-12 and abs(picked.data[1] - 4.0) < 1e-12
+
+    # causal: position i averages only values 0..i, so position 0 returns value 0 exactly
+    T = 4
+    q, k, v = rand_shape(T, 3), rand_shape(T, 3), rand_shape(T, 2)
+    out = scaled_dot_product_attention(q, k, v, causal=True)
+    assert all(close(a, b) for a, b in zip(out.data, ref_attention(q, k, v, causal=True)))
+    assert close(out.data[0], v.data[0]) and close(out.data[1], v.data[1])
+
+    # changing the last key and value can't change earlier outputs, and earlier outputs
+    # send them no gradient
+    k2 = tensor(k.data[:9] + [5.0, -5.0, 5.0], shape=(T, 3))
+    v2 = tensor(v.data[:6] + [100.0, -100.0], shape=(T, 2))
+    changed = scaled_dot_product_attention(q, k2, v2, causal=True)
+    assert changed.data[:6] == out.data[:6] and changed.data[6:] != out.data[6:]
+    early = scaled_dot_product_attention(q, k, v, causal=True)[:3]
+    early.sum().backward()
+    assert k.grad[9:] == [0.0] * 3 and v.grad[6:] == [0.0] * 2
+    assert any(g != 0.0 for g in k.grad[:9])
+
+    # leading dims: each (batch, head) slice is attended separately
+    q, k, v = rand_shape(2, 2, 4, 3), rand_shape(2, 2, 4, 3), rand_shape(2, 2, 4, 2)
+    for causal in [False, True]:
+        out = scaled_dot_product_attention(q, k, v, causal=causal)
+        assert out.shape == (2, 2, 4, 2)
+        for b in range(2):
+            for h in range(2):
+                one = scaled_dot_product_attention(q[b, h], k[b, h], v[b, h], causal=causal)
+                assert out[b, h].data == one.data
+        r = rand_shape(2, 2, 4, 2)
+        gradcheck(lambda a, b, c: (scaled_dot_product_attention(a, b, c, causal=causal) * r).sum(), q, k, v)
+
+    q, k, v = rand_shape(3, 4), rand_shape(5, 4), rand_shape(5, 2)
+    assert raises(lambda: scaled_dot_product_attention(q, rand_shape(5, 3), v), ValueError)
+    assert raises(lambda: scaled_dot_product_attention(q, k, rand_shape(4, 2)), ValueError)
+    assert raises(lambda: scaled_dot_product_attention(q, k, v, causal=True), ValueError)
+    assert raises(lambda: scaled_dot_product_attention(rand_shape(2, 3, 4), rand_shape(1, 3, 4), rand_shape(1, 3, 4)), ValueError)
 
 
 if __name__ == "__main__":
