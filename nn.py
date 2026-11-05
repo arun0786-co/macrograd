@@ -129,8 +129,13 @@ class linear(module):
         self.b = tensor(b_data)
 
     def __call__(self,x):
-        out = x.matmul(self.w) + self.b
-        return out
+        if len(x.shape) == 2:
+            return x.matmul(self.w) + self.b
+        # any other shape, like (batch, time, features) or a single (features,) row:
+        # the leading dims are flattened into rows for the matmul and put back after
+        lead = x.shape[:-1]
+        out = x.reshape(-1, x.shape[-1]).matmul(self.w) + self.b
+        return out.reshape(lead + (self.w.shape[1],))
     
     def __repr__(self):
         return f"Linear(in_features={self.w.shape[0]}, out_features={self.w.shape[1]})"

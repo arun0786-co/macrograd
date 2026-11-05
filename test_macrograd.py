@@ -1393,6 +1393,25 @@ def test_scaled_dot_product_attention():
     assert raises(lambda: scaled_dot_product_attention(rand_shape(2, 3, 4), rand_shape(1, 3, 4), rand_shape(1, 3, 4)), ValueError)
 
 
+def test_linear_with_leading_dims():
+    random.seed(25)
+    layer = linear(4, 3)
+    layer.b.data = [0.5, -1.0, 2.0]
+    x = rand_shape(2, 5, 4)
+    out = layer(x)
+    assert out.shape == (2, 5, 3)
+    # same as applying the layer to each (5, 4) slice, or to every row on its own
+    for n in range(2):
+        assert out[n].data == layer(x[n]).data
+    assert layer(x[1, 2]).shape == (3,) and layer(x[1, 2]).data == out[1, 2].data
+    # 2-d inputs keep the plain matmul + bias graph
+    assert layer(x[0])._op == "+"
+
+    y = rand_shape(2, 5, 3)
+    gradcheck(lambda a, w, b: layer(a).mse_loss(y), x, layer.w, layer.b)
+    assert raises(lambda: layer(rand_shape(2, 5, 3)), ValueError)
+
+
 if __name__ == "__main__":
     tests = [f for name, f in list(globals().items()) if name.startswith("test_")]
     for t in tests:
