@@ -1,5 +1,8 @@
+import json
 import math
+import os
 import random
+import tempfile
 
 from engine import tensor, concat, gradcheck
 from nn import MLP, dropout, linear, module, sequential
@@ -853,6 +856,50 @@ def test_batches():
     assert raises(lambda: next(batches(x, labels[:9], 4)), ValueError)
     assert raises(lambda: next(batches(x, labels, 0)), ValueError)
     assert raises(lambda: next(batches(x, labels, 2.0)), ValueError)
+
+
+def test_save_and_load():
+    random.seed(12)
+    model = MLP([3, 4, 2])
+    names = [name for name, _ in model.named_parameters()]
+    assert names == ["layers.0.w", "layers.0.b", "layers.1.w", "layers.1.b"]
+    assert [name for name, _ in sequential(linear(2, 2), model).named_parameters()][2:] == [
+        "layers.1.layers.0.w", "layers.1.layers.0.b", "layers.1.layers.1.w", "layers.1.layers.1.b"]
+
+    x = rand_tensor(5, 3)
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "weights.json")
+        model.save(path)
+        with open(path) as f:
+            state = json.load(f)
+        assert list(state) == names and state["layers.0.w"]["shape"] == [3, 4]
+
+        # a fresh model with other random weights gives the same numbers after loading
+        other = MLP([3, 4, 2])
+        assert other(x).data != model(x).data
+        tensors_before = other.parameters()
+        other.load(path)
+        assert other(x).data == model(x).data
+        assert all(a.data == b.data for a, b in zip(other.parameters(), model.parameters()))
+
+        # loading copies into the same tensors, so an optimizer made earlier still updates them
+        assert all(a is b for a, b in zip(other.parameters(), tensors_before))
+        opt = SGD(tensors_before, lr=0.1)
+        other(x).sum().backward()
+        opt.step()
+        assert other(x).data != model(x).data
+
+        assert raises(lambda: MLP([3, 5, 2]).load(path), ValueError)
+        assert raises(lambda: MLP([3, 4, 4, 2]).load(path), ValueError)
+        assert raises(lambda: linear(3, 4).load(path), ValueError)
+
+        # names come from where tensors are stored. sequential keeps its layers in
+        # self.layers like MLP does, so the same two linears load, but a relu between
+        # them moves the second one to layers.2
+        stack = sequential(linear(3, 4), linear(4, 2))
+        stack.load(path)
+        assert [p.data for p in stack.parameters()] == [p.data for p in model.parameters()]
+        assert raises(lambda: sequential(linear(3, 4), lambda h: h.relu(), linear(4, 2)).load(path), ValueError)
 
 
 if __name__ == "__main__":

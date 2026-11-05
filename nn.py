@@ -1,4 +1,5 @@
-import random 
+import json
+import random
 try:
     from .engine import tensor
 except ImportError:
@@ -22,24 +23,58 @@ class module:
                 if isinstance(item, module):
                     yield item
 
-    def parameters(self):
+    def named_parameters(self):
         # every tensor stored as an attribute (or in a list), plus the parameters of every
-        # sub-module, so a new layer only has to store its tensors. a tensor shared by two
-        # layers is listed once, so the optimizer doesn't update it twice per step
+        # sub-module, so a new layer only has to store its tensors. each one is named by
+        # where it is stored: 'layers.0.w' is the w of the first module in self.layers.
+        # a tensor shared by two layers is listed once, under the first name found, so the
+        # optimizer doesn't update it twice per step
         params, seen = [], set()
-        for v in vars(self).values():
-            for item in (v if isinstance(v, (list, tuple)) else [v]):
+        for attr, v in vars(self).items():
+            if isinstance(v, (list, tuple)):
+                items = [(f"{attr}.{i}", item) for i, item in enumerate(v)]
+            else:
+                items = [(attr, v)]
+            for name, item in items:
                 if isinstance(item, tensor):
-                    found = [item]
+                    found = [(name, item)]
                 elif isinstance(item, module):
-                    found = item.parameters()
+                    found = [(f"{name}.{sub}", p) for sub, p in item.named_parameters()]
                 else:
                     continue
-                for p in found:
+                for full_name, p in found:
                     if id(p) not in seen:
                         seen.add(id(p))
-                        params.append(p)
+                        params.append((full_name, p))
         return params
+
+    def parameters(self):
+        return [p for _, p in self.named_parameters()]
+
+    def save(self, path):
+        # writes every parameter to a JSON file as {name: {"shape": [...], "data": [...]}}.
+        # json writes floats with enough digits to read back the exact same number
+        state = {name: {"shape": list(p.shape), "data": p.data} for name, p in self.named_parameters()}
+        with open(path, "w") as f:
+            json.dump(state, f)
+
+    def load(self, path):
+        # reads a file written by save() into this module's parameters. every name and shape
+        # must match, so loading weights into a different model fails loudly. the values are
+        # copied into the existing tensors, so an optimizer holding them keeps working
+        with open(path) as f:
+            state = json.load(f)
+        params = dict(self.named_parameters())
+        missing = [name for name in params if name not in state]
+        unexpected = [name for name in state if name not in params]
+        if missing or unexpected:
+            raise ValueError(f"Weights don't match the model: missing {missing}, unexpected {unexpected}")
+        for name, p in params.items():
+            shape = tuple(state[name]["shape"])
+            if shape != p.shape or len(state[name]["data"]) != len(p.data):
+                raise ValueError(f"{name} has shape {shape} in the file but {p.shape} in the model")
+        for name, p in params.items():
+            p.data[:] = [float(v) for v in state[name]["data"]]
     
     def train(self):
         self.training = True

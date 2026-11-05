@@ -37,6 +37,7 @@ Macrograd goes further:
 * Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
 * Per-layer activation functions (pass callables) and dropout rates.
 * Dropout layer with `.train()` and `.eval()` modes for training vs. inference.
+* `.save(path)` writes the weights to a JSON file and `.load(path)` reads them back into a model of the same shape. Each tensor is stored under its name from `.named_parameters()`, like `layers.0.w`.
 
 **The Optimizers (`optim`)**
 
