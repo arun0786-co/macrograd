@@ -228,6 +228,60 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     return scores.softmax() @ v
 
 
+def sample(logits, temperature=1.0, top_k=None, rng=None):
+    # picks ids from a model's output scores, for generating text one token at a time.
+    # logits is (V,) for one pick or (B, V) for one pick per row; returns an int, or a
+    # list of B ints. each row becomes probabilities
+    #   p_i = softmax(z / temperature)_i
+    # temperature 1 samples the model's own distribution, below 1 sharpens it towards the
+    # top score, above 1 flattens it towards uniform, and 0 always takes the top score.
+    # top_k keeps only the k highest scores (ties go to the lower index) and gives the rest
+    # probability 0, so a long tail of unlikely tokens can't be picked by bad luck.
+    # the draw: lay the probabilities end to end along [0, 1), pick a uniform random u and
+    # return the index whose segment u lands in. segment i has length p_i, so index i is
+    # picked with chance p_i.
+    # no backward: the result is a choice of index, which doesn't change smoothly with the
+    # scores, so there is no gradient to send back. sampling is for generating after
+    # training, never part of the loss.
+    # rng is anything with a random() method, like random.Random(seed); the default is the
+    # random module, so random.seed() makes the picks repeatable
+    rng = random if rng is None else rng
+    if len(logits.shape) not in (1, 2):
+        raise ValueError(f"sample expects logits of shape (V,) or (B, V), got {logits.shape}")
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not 0 <= temperature < float("inf"):
+        raise ValueError(f"temperature must be a finite number >= 0, got {temperature!r}")
+    if top_k is not None and (isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1):
+        raise ValueError(f"top_k must be an int >= 1 or None, got {top_k!r}")
+    V = logits.shape[-1]
+    picks = []
+    for start in range(0, len(logits.data), V):
+        row = logits.data[start:start + V]
+        if top_k is not None and top_k < V:
+            # sorted is stable, so among equal scores the lower index comes first
+            keep = set(sorted(range(V), key=lambda i: -row[i])[:top_k])
+            row = [z if i in keep else float("-inf") for i, z in enumerate(row)]
+        if max(row) == float("-inf"):
+            raise ValueError("sample needs at least one score above -inf in each row")
+        if temperature == 0:
+            picks.append(row.index(max(row)))
+            continue
+        probs = tensor([z / temperature for z in row]).softmax().data
+        u = rng.random()
+        end = 0.0
+        pick = None
+        for i, p in enumerate(probs):
+            end += p
+            if u < end:
+                pick = i
+                break
+        if pick is None:
+            # rounding can leave the probabilities summing to just under 1, with u past the
+            # end; that sliver belongs to the last index that can be picked
+            pick = max(i for i, p in enumerate(probs) if p > 0)
+        picks.append(pick)
+    return picks if len(logits.shape) == 2 else picks[0]
+
+
 class MLP(module):
     def __init__(self, layer_sizes, activation_fns=None, dropout_p=None):
         super().__init__()

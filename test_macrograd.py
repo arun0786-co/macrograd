@@ -6,7 +6,7 @@ import tempfile
 
 from engine import tensor, concat, gradcheck
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rnn_cell, sequential, transformer_block
-from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention
+from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
 
@@ -1559,6 +1559,71 @@ def test_transformer_block():
         assert raises(lambda: transformer_block(4, num_heads=2, hidden=bad), ValueError)
     assert raises(lambda: small(rand_shape(3, 4)), ValueError)
     assert raises(lambda: small(rand_shape(2, 3, 5)), ValueError)
+
+
+def ref_sample(row, temperature, top_k, rng):
+    # math.exp weights that aren't normalized, and u scaled up to their total instead
+    V = len(row)
+    keep = sorted(range(V), key=lambda i: (-row[i], i))[:top_k or V]
+    top = max(row[i] for i in keep)
+    weights = [math.exp((row[i] - top) / temperature) if i in keep else 0.0 for i in range(V)]
+    u = rng.random() * math.fsum(weights)
+    end = 0.0
+    for i, w in enumerate(weights):
+        end += w
+        if u < end:
+            return i
+
+
+def test_sample():
+    random.seed(33)
+    z = [1.0, 2.0, 0.5, -1.0, 0.0, 2.0]
+    probs = [math.exp(v) / math.fsum(math.exp(w) for w in z) for v in z]
+
+    # each id comes up as often as its softmax probability says. the count of id i out of
+    # N draws is binomial, so it stays within 5 standard deviations of N * p_i
+    N = 10000
+    picks = sample(tensor([z] * N))
+    assert len(picks) == N and all(isinstance(i, int) for i in picks)
+    for i, p in enumerate(probs):
+        assert abs(picks.count(i) - N * p) < 5 * math.sqrt(N * p * (1 - p)), (i, picks.count(i), N * p)
+
+    # draw for draw the same as the reference, given the same random numbers
+    for temperature in [0.3, 1.0, 2.5]:
+        for top_k in [None, 1, 2, 3, 6, 10]:
+            got = sample(tensor([z] * 200), temperature, top_k, rng=random.Random(5))
+            ref_rng = random.Random(5)
+            assert got == [ref_sample(z, temperature, top_k, ref_rng) for _ in range(200)], (temperature, top_k)
+
+    # top_k: ids 1 and 5 tie for the top score, and on ties the lower index is kept
+    assert set(sample(tensor([z] * 200), top_k=2)) == {1, 5}
+    assert sample(tensor([z] * 50), top_k=1) == [1] * 50
+
+    # temperature 0 takes the top score, the first on ties, without using up a random number
+    state = random.getstate()
+    assert sample(tensor(z), temperature=0) == 1
+    assert sample(tensor([z, [0.0, -1.0, 3.0, 1.0, 0.0, 0.0]]), temperature=0) == [1, 2]
+    assert random.getstate() == state
+
+    # every row draws from its own scores, and a -inf score is never picked
+    inf = float("-inf")
+    picks = sample(tensor([[inf, inf, 0.0], [0.0, inf, inf], [0.0, inf, 0.0]] * 100))
+    assert picks[0::3] == [2] * 100 and picks[1::3] == [0] * 100 and set(picks[2::3]) == {0, 2}
+
+    # these probabilities add up to 0.9999999999999998 after rounding, so the largest u that
+    # random() gives lands past the end. it goes to the last id that can be picked
+    class largest_u:
+        def random(self):
+            return 1 - 2 ** -53
+    assert sample(tensor([2.9, -2.8, -2.9, inf]), rng=largest_u()) == 2
+
+    for bad in [-0.5, True, "1", float("inf"), float("nan")]:
+        assert raises(lambda: sample(tensor(z), temperature=bad), ValueError)
+    for bad in [0, -2, 1.5, True]:
+        assert raises(lambda: sample(tensor(z), top_k=bad), ValueError)
+    assert raises(lambda: sample(tensor(2.0)), ValueError)
+    assert raises(lambda: sample(tensor([[z]])), ValueError)
+    assert raises(lambda: sample(tensor([[0.0, 1.0], [inf, inf]])), ValueError)
 
 
 if __name__ == "__main__":
