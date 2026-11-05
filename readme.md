@@ -46,6 +46,10 @@ Macrograd goes further:
 * `clip_grad_norm(parameters, max_norm)` scales all gradients down together when their combined length is over `max_norm`. Call it between `backward()` and `step()`.
 * Learning rate schedules: `StepLR(optimizer, step_size, gamma)` multiplies the lr by `gamma` every `step_size` epochs, and `CosineAnnealingLR(optimizer, T_max, eta_min)` lowers it from the starting lr to `eta_min` along a half cosine over `T_max` epochs. Call `.step()` once per epoch, after `optimizer.step()`.
 
+**Data (`data`)**
+
+* `batches(x, y, batch_size, shuffle=True)` splits a dataset into mini-batches of rows, in a new random order each call. `y` can be a tensor or a list of integer labels.
+
 ## 🚀 Quick Start
 
 See [train.py](train.py) for a full example (3→4→4→1 network, 100 epochs, loss tracking).

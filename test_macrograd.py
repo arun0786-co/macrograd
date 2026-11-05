@@ -4,6 +4,7 @@ import random
 from engine import tensor, concat, gradcheck
 from nn import MLP, dropout, linear, module, sequential
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
+from data import batches
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -813,6 +814,45 @@ def test_lr_schedules():
     assert raises(lambda: StepLR(opt, step_size=2, gamma=0.0), ValueError)
     assert raises(lambda: CosineAnnealingLR(opt, T_max=0), ValueError)
     assert raises(lambda: CosineAnnealingLR(opt, T_max=10, eta_min=-0.1), ValueError)
+
+
+def test_batches():
+    # row i of x is [i, 10i], label i, so every pair can be checked after shuffling
+    x = tensor([[float(i), 10.0 * i] for i in range(10)])
+    labels = list(range(10))
+
+    in_order = list(batches(x, labels, batch_size=4, shuffle=False))
+    assert [len(yb) for _, yb in in_order] == [4, 4, 2]
+    assert in_order[0][0].shape == (4, 2) and in_order[2][0].shape == (2, 2)
+    assert in_order[1][0].data == [4.0, 40.0, 5.0, 50.0, 6.0, 60.0, 7.0, 70.0]
+    assert in_order[1][1] == [4, 5, 6, 7]
+
+    random.seed(11)
+    orders = []
+    for _ in range(2):
+        seen = []
+        for xb, yb in batches(x, labels, batch_size=3):
+            for r, label in enumerate(yb):
+                assert xb.data[2 * r] == label and xb.data[2 * r + 1] == 10.0 * label
+            seen += yb
+        assert sorted(seen) == labels
+        orders.append(seen)
+    assert orders[0] != labels and orders[0] != orders[1]
+
+    # y as a tensor, and 3-d rows keep their shape
+    y = tensor([[float(i)] for i in range(10)])
+    xb, yb = next(batches(x, y, batch_size=5, shuffle=False))
+    assert yb.shape == (5, 1) and yb.data == [0.0, 1.0, 2.0, 3.0, 4.0]
+    images = tensor([[[float(i)] * 2] * 2 for i in range(6)])
+    xb, yb = next(batches(images, labels[:6], batch_size=4, shuffle=False))
+    assert xb.shape == (4, 2, 2) and xb.data[4:8] == [1.0] * 4
+
+    # batches are fresh tensors, outside the graph
+    assert xb._prev == set()
+
+    assert raises(lambda: next(batches(x, labels[:9], 4)), ValueError)
+    assert raises(lambda: next(batches(x, labels, 0)), ValueError)
+    assert raises(lambda: next(batches(x, labels, 2.0)), ValueError)
 
 
 if __name__ == "__main__":
