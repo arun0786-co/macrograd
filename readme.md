@@ -1,82 +1,25 @@
-
 # Macrograd
 
-A lightweight, N-dimensional tensor autograd engine and neural network library built entirely from scratch—no numpy, no math library, just pure Python.
+An autograd engine and neural network library in pure Python that works on N-dimensional tensors. It doesn't use numpy or even the `math` module. `exp` and `log` are Taylor series, with range reduction so they stay accurate for big and small inputs.
 
-Macrograd implements a dynamic computational graph (DAG) for backpropagation, similar to PyTorch. Every op works on whole tensors (batched matmul, activations, losses), written as plain Python loops with no C backend.
+Like PyTorch, it records each op in a graph as it runs and backpropagates through that graph. It's slow on purpose. Every op is a plain Python loop over a flat list of numbers, so you can follow the whole forward and backward pass.
 
-## 🥊 Macrograd vs. Micrograd
+## Compared to micrograd
 
-If you know Andrej Karpathy's `micrograd`, you'll see why this exists. Micrograd is brilliant for learning, but it works on **scalars only**.
+Andrej Karpathy's [micrograd](https://github.com/karpathy/micrograd) is a great way to learn backprop, but it only works on scalars. Macrograd does the same thing on tensors. A tensor is a flat list with a shape and strides, so a whole layer runs as one `x @ W` instead of a loop over neurons. Layers hold a full weight matrix, like PyTorch's `nn.Linear`, and there's no `Neuron` class.
 
-Macrograd goes further:
+## Running it
 
-* **Tensors over Scalars:** Micrograd wraps individual numbers. Macrograd uses N-dimensional flat arrays with custom stride logic for real-world data.
-* **Batched Matmul:** Micrograd loops over neurons individually. Macrograd does `X @ W` in a single pass—entire layers at once.
-* **No External Math:** No `math` module, no numpy. Exponents and logs computed from Taylor Series approximations, with range reduction so they stay accurate for large and small inputs.
-* **Layer-level modules:** each `linear` layer holds a full weight matrix (no `Neuron` abstraction), like PyTorch's `nn.Linear`.
+The library only uses the standard library. `visualize.py`, and so `train.py`, also needs the `graphviz` package to draw graphs.
 
-## ⚙️ Features
+```sh
+python3 test_macrograd.py   # tests
+python3 train.py            # tiny MLP, then draws its graph
+python3 train_iris.py       # MLP on iris
+python3 train_digits.py     # CNN on handwritten digits
+```
 
-**The Engine (`tensor`)**
-
-* N-dimensional flat arrays with stride-based indexing.
-* All ops: `+`, `-`, `*`, `/`, `**`, `@` (batched matmul).
-* Reductions: `.sum(axis, keepdim)` (everything by default, or along one axis), `.mean(axis, keepdim)`, `.var(axis, keepdim)`, `.std()`, `.max(axis, keepdim)`, `.argmax(axis, keepdim)`.
-* Shape ops: `.reshape()` (one dimension can be `-1` and is inferred), `.transpose(dim0, dim1)` (swaps the last two dims by default), indexing with ints, slices and lists of ints (`x[0]`, `x[:, 1:3]`, `x[[2, 0]]`). `concat(tensors, axis)` joins tensors along an axis.
-* Broadcasting like numpy: `+` and `*` line shapes up from the right and repeat size-1 dims, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it directly.
-* Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` and `log_softmax` (per row).
-* Normalization: `.layer_norm(eps)` moves each row (last dim) to mean 0 and variance 1, as one node with its own backward.
-* Convolution: `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images, with zero padding around the edges.
-* Pooling: `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel. `.flatten(start_dim)` joins the dims from `start_dim` on into one.
-* Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop), `nll_loss(labels)` (integer class labels, use after `log_softmax`), `binary_cross_entropy_with_logits` (sigmoid built in, for yes/no outputs).
-* `accuracy(labels)`: fraction of rows whose highest score is the right class.
-* `gradcheck(f, *inputs)` checks any op's backward pass against finite differences.
-
-**The Network (`nn`)**
-
-* `module`, `linear`, `conv2d`, `max_pool2d`, `flatten`, `rnn_cell`, `multi_head_attention`, `transformer_block`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
-* `conv2d(in_channels, out_channels, kernel_size, stride, padding)` holds square filters and one bias per filter.
-* `max_pool2d(kernel_size)` and `flatten()` (keeps the batch dim) wrap the tensor ops as layers, so `sequential(conv2d(1, 8, 3, padding=1), lambda x: x.relu(), max_pool2d(2), flatten(), linear(...))` is a small CNN.
-* `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
-* `batch_norm(dim)` normalizes each feature over the batch in training and keeps running averages of the mean and variance for `.eval()` mode. The running stats are buffers (listed by `.named_buffers()`, set with `buffer_names`): saved with the weights but never touched by the optimizer.
-* `.parameters()` finds every tensor a module stores, including inside sub-modules and lists, so a custom layer only has to store its tensors. `sequential(layer, ...)` chains modules and plain functions.
-* Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
-* `linear` takes inputs with any leading dims, like `(batch, time, features)`, and applies the same weights to every row.
-* `xavier_uniform`, `xavier_normal` (for tanh and sigmoid) and `kaiming_uniform`, `kaiming_normal` (for relu) re-initialize a linear or conv2d weight in place, like `kaiming_normal(layer.w)`, so activations keep their size through deep networks.
-* Per-layer activation functions (pass callables) and dropout rates.
-* `scaled_dot_product_attention(q, k, v, causal=False)` computes `softmax(q @ k^T / sqrt(d)) @ v` over any leading (batch, head) dims. With `causal=True`, position `i` only sees positions `0..i`.
-* `multi_head_attention(dim, num_heads)` is self-attention for `(B, T, dim)` inputs: it projects to queries, keys and values, splits them into heads that attend separately, then joins the heads and projects again. Call it as `mha(x, causal=True)` for a model that must not look ahead.
-* `transformer_block(dim, num_heads, hidden=4 * dim)` is one GPT-style layer for `(B, T, dim)` inputs: `x = x + attn(ln1(x))`, then `x = x + mlp(ln2(x))`, where the MLP widens each position to `hidden` features with gelu. The residual `x +` paths give the gradient a direct route back, and the output keeps the input's shape, so blocks stack: `for block in blocks: x = block(x, causal=True)`.
-* `sample(logits, temperature=1.0, top_k=None)` picks ids from a model's scores, for generating text: `softmax(logits / temperature)` gives each id a probability and one is drawn at random. Lower temperature sharpens the choice (0 always takes the top score), higher flattens it, and `top_k` lets only the k highest scores be picked. Pass `(V,)` scores for one id or `(B, V)` for one per row.
-* `rnn_cell(input_size, hidden_size)` is one step of a recurrent network, `h = tanh(x @ w_x + h @ w_h + b)`. Call it in a loop over a sequence, passing the hidden state along; backprop through time comes from the graph.
-* `embedding(num_embeddings, dim)` is a learned table with one vector per id. Pass integer ids of any shape and get their vectors back, shape `ids.shape + (dim,)`.
-* Dropout layer with `.train()` and `.eval()` modes for training vs. inference.
-* `.save(path)` writes the weights (and buffers) to a JSON file and `.load(path)` reads them back into a model of the same shape. Each tensor is stored under its name from `.named_parameters()`, like `layers.0.w`.
-
-**The Optimizers (`optim`)**
-
-* `SGD` with optional `momentum` and `weight_decay`.
-* `Adam` with per-parameter momentum and velocity tracking.
-* `AdamW`: Adam with decoupled weight decay (shrinks weights directly instead of adding to the gradient).
-* `clip_grad_norm(parameters, max_norm)` scales all gradients down together when their combined length is over `max_norm`. Call it between `backward()` and `step()`.
-* Learning rate schedules: `StepLR(optimizer, step_size, gamma)` multiplies the lr by `gamma` every `step_size` epochs, and `CosineAnnealingLR(optimizer, T_max, eta_min)` lowers it from the starting lr to `eta_min` along a half cosine over `T_max` epochs. Call `.step()` once per epoch, after `optimizer.step()`.
-
-**Data (`data`)**
-
-* `batches(x, y, batch_size, shuffle=True)` splits a dataset into mini-batches of rows, in a new random order each call. `y` can be a tensor or a list of integer labels.
-
-## 🚀 Quick Start
-
-See [train.py](train.py) for a full example (3→4→4→1 network, 100 epochs, loss tracking).
-
-[train_iris.py](train_iris.py) trains a 4→16→3 classifier on the UCI iris dataset (downloaded on the first run) with mini-batches, AdamW and a cosine lr schedule, then saves the weights and loads them back. It runs in about a second and gets 29 of 30 test flowers right (28 to 30 across random seeds 0 to 5).
-
-[train_digits.py](train_digits.py) trains a small CNN (two conv + max pool blocks, then a linear layer) on the UCI optdigits dataset of 8x8 handwritten digits, downloaded on the first run. The test images come from different writers than the training images. Five epochs take about a minute and reach 97.0% test accuracy on 1797 images (96.4% to 97.0% across random seeds 0 to 3).
-
-Run the tests with `python3 test_macrograd.py`. They compare forward values against Python's `math` module and check gradients against finite differences.
-
-To check the gradients of your own op, pass a function that returns a single value:
+The tests compare forward values with Python's `math` module and check gradients against finite differences. To check the backward pass of your own op, give `gradcheck` a function that returns one number:
 
 ```python
 from engine import tensor, gradcheck
@@ -85,11 +28,63 @@ x = tensor([[0.5, -1.0], [2.0, 0.3]])
 gradcheck(lambda a: (a.tanh() * a).sum(), x)  # True, or raises at the first mismatch
 ```
 
-**Default behavior:**
+`train.py` fits a 3→4→4→1 MLP (relu, then leaky relu, with dropout) to four points with Adam for 100 epochs, prints the loss as it goes and renders the graph of the last loss to `macrograd_architecture.svg`.
 
-* All hidden layers use `relu` if `activation_fns=None`
-* No dropout if `dropout_p=None`
+`train_iris.py` trains a 4→16→3 classifier on the UCI iris dataset with mini-batches, AdamW and a cosine lr schedule, then saves the weights and loads them back. It takes about a second and gets 29 of 30 test flowers right (28 to 30 across random seeds 0 to 5).
 
-## 🧠 Graph Visualization
+`train_digits.py` trains a small CNN, two conv + max pool blocks and a linear layer, on UCI optdigits: 8x8 images of handwritten digits. The test digits were written by different people than the training digits. Five epochs take about a minute and get 97.0% of the 1797 test images right (96.4% to 97.0% across seeds 0 to 3).
 
-Every tensor tracks its `_prev` children and `_op` tag. Call `draw_dot(loss_tensor)` to export a Graphviz `.svg` showing the full computational graph—forward ops and backward gradients in one clean diagram.
+Both datasets download into `datasets/` on the first run, and the saved weights go in `checkpoints/`.
+
+## What's in it
+
+### engine.py
+
+`tensor` holds a flat list of numbers with a shape and strides.
+
+- Arithmetic: `+`, `-`, `*`, `/`, `**` and `@`. `@` also works on batches when the leading dims match.
+- `+` and `*` broadcast like numpy. Shapes line up from the right and size-1 dims repeat, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it explicitly.
+- Reductions: `.sum`, `.mean`, `.var`, `.max` and `.argmax` take `axis` and `keepdim` and reduce everything by default. There's also `.std()`.
+- Shapes: `.reshape()` (one dim can be `-1`), `.transpose(dim0, dim1)` (the last two dims by default), `.flatten(start_dim)` and `concat(tensors, axis)`. Indexing takes ints, slices and lists of ints: `x[0]`, `x[:, 1:3]`, `x[[2, 0]]`.
+- Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (the tanh approximation), and `softmax` and `log_softmax` over each row.
+- `.layer_norm(eps)` moves each row to mean 0 and variance 1, as one node with a handwritten backward.
+- `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images and zero-pads the edges. `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel.
+- Losses: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, one node in the graph), `nll_loss(labels)` for integer labels after `log_softmax`, and `binary_cross_entropy_with_logits` for yes/no outputs, with the sigmoid built in.
+- `accuracy(labels)` is the fraction of rows whose highest score is the right class.
+- `gradcheck(f, *inputs)` checks any backward pass against finite differences.
+
+### nn.py
+
+Layers subclass `module`. `.parameters()` finds every tensor a module stores, including ones inside sub-modules and lists, so a new layer only has to assign its tensors. `.train()` and `.eval()` switch dropout and batch norm between training and inference.
+
+- `linear(nin, nout)` is a matmul plus a bias, with init scaled by fan-in. Inputs can have extra leading dims, like `(batch, time, features)`, and every row gets the same weights.
+- `MLP(layer_sizes, activation_fns=None, dropout_p=None)` stacks linear layers. You can pass an activation function and a dropout rate for each hidden layer. By default every hidden layer uses relu and there's no dropout.
+- `sequential(*layers)` runs layers in order. A layer can also be a plain function like `lambda x: x.relu()`.
+- `dropout(p)` only drops values in training mode.
+- `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
+- `batch_norm(dim)` normalizes each feature over the batch while training and keeps running averages of the mean and variance to use in `.eval()` mode. The running stats are buffers (see `buffer_names` and `.named_buffers()`), so they're saved with the weights, but the optimizer never changes them.
+- `conv2d(in_channels, out_channels, kernel_size, stride, padding)` has square filters and one bias per filter. `max_pool2d(kernel_size)` and `flatten()` wrap the tensor ops, and `flatten` keeps the batch dim, so a small CNN looks like `sequential(conv2d(1, 8, 3, padding=1), lambda x: x.relu(), max_pool2d(2), flatten(), linear(...))`.
+- `embedding(num_embeddings, dim)` is a learned table with one vector per id. Ids of any shape come back as vectors of shape `ids.shape + (dim,)`.
+- `rnn_cell(input_size, hidden_size)` is one step, `h = tanh(x @ w_x + h @ w_h + b)`. Loop it over a sequence and pass `h` along. Backprop through time comes from the graph.
+- `scaled_dot_product_attention(q, k, v, causal=False)` computes `softmax(q @ k^T / sqrt(d)) @ v` over any leading batch and head dims. With `causal=True`, position `i` only sees positions `0..i`.
+- `multi_head_attention(dim, num_heads)` is self-attention on `(B, T, dim)` inputs. It projects to queries, keys and values, splits them into heads that attend separately, then joins the heads and projects again. Call it as `mha(x, causal=True)` when the model must not look ahead.
+- `transformer_block(dim, num_heads, hidden=4 * dim)` is one GPT-style layer: `x = x + attn(ln1(x))`, then `x = x + mlp(ln2(x))`, where the MLP widens each position to `hidden` features with gelu. The `x +` residual paths give the gradient a direct way back to the input. The output has the same shape as the input, so blocks stack: `for block in blocks: x = block(x, causal=True)`.
+- `sample(logits, temperature=1.0, top_k=None)` picks ids from a model's scores when generating text. It draws from `softmax(logits / temperature)`. A lower temperature favors the top scores (0 always takes the best one), a higher one spreads the picks out, and `top_k` only allows the k highest scores. Give it `(V,)` scores for one id or `(B, V)` for one per row.
+- `xavier_uniform` and `xavier_normal` (for tanh and sigmoid), and `kaiming_uniform` and `kaiming_normal` (for relu), re-initialize a linear or conv2d weight in place, like `kaiming_normal(layer.w)`, so activations keep their size through deep networks.
+- `.save(path)` writes the weights and buffers to a JSON file, and `.load(path)` reads them into a model with the same layout. Each tensor is stored under its `.named_parameters()` name, like `layers.0.w`.
+
+### optim.py
+
+- `SGD` with optional `momentum` and `weight_decay`.
+- `Adam`, which keeps a momentum and a velocity for each parameter.
+- `AdamW` is Adam with decoupled weight decay. It shrinks the weights directly instead of adding the decay to the gradient.
+- `clip_grad_norm(parameters, max_norm)` scales all the gradients down together when their combined length is over `max_norm`. Call it between `backward()` and `step()`.
+- `StepLR(optimizer, step_size, gamma)` multiplies the lr by `gamma` every `step_size` epochs. `CosineAnnealingLR(optimizer, T_max, eta_min)` lowers it from the starting lr to `eta_min` along a half cosine over `T_max` epochs. Call the schedule's `.step()` once per epoch, after `optimizer.step()`.
+
+### data.py
+
+`batches(x, y, batch_size, shuffle=True)` splits a dataset into mini-batches of rows, in a new random order each time. `y` can be a tensor or a list of integer labels.
+
+### visualize.py
+
+Every tensor keeps the tensors it came from (`_prev`) and the op that made it (`_op`). `draw_dot(loss)` walks back from `loss` and returns a Graphviz graph with an oval for each op and a box for each tensor, showing the first two values of its data and gradient.
