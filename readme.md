@@ -17,6 +17,7 @@ python3 test_macrograd.py   # tests
 python3 train.py            # tiny MLP, then draws its graph
 python3 train_iris.py       # MLP on iris
 python3 train_digits.py     # CNN on handwritten digits
+python3 train_gpt.py        # tiny GPT on Shakespeare
 ```
 
 The tests compare forward values with Python's `math` module and check gradients against finite differences. To check the backward pass of your own op, give `gradcheck` a function that returns one number:
@@ -34,7 +35,22 @@ gradcheck(lambda a: (a.tanh() * a).sum(), x)  # True, or raises at the first mis
 
 `train_digits.py` trains a small CNN, two conv + max pool blocks and a linear layer, on UCI optdigits: 8x8 images of handwritten digits. The test digits were written by different people than the training digits. Five epochs take about a minute and get 97.0% of the 1797 test images right (96.4% to 97.0% across seeds 0 to 3).
 
-Both datasets download into `datasets/` on the first run, and the saved weights go in `checkpoints/`.
+`train_gpt.py` trains a tiny character-level GPT on tiny Shakespeare, 1.1 million characters from the plays. The model has token and position embeddings, one transformer block with 4 heads, 32 numbers per character and a 16-character context, 17,505 parameters in all. 1500 steps of 8 random windows take about 13 minutes. Guessing evenly among the 65 characters would score a loss of 4.17, and a bigram model that only looks at the previous character scores 2.48. The model gets 2.18 on held-out text (2.19 with another seed). Then it writes 300 characters after `ROMEO:`:
+
+```text
+ROMEO:
+Whand seard fordter a ben fort is hear,
+Wamon: thy your a knofile.
+
+QUS:
+Fo hand he sow, I stremay the con lay,
+Selai wides the ome the des! I con that inift he of athe pron:
+And speme, ank hothe the fou.
+```
+
+It has the layout of a play, with speaker names in capitals, colons and short lines, and some real words like "thy", "hand" and "that", but most of the words are made up.
+
+The datasets download into `datasets/` on the first run, and the saved weights go in `checkpoints/`.
 
 ## What's in it
 
