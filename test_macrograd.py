@@ -5,7 +5,7 @@ import random
 import tempfile
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, batch_norm, dropout, layer_norm, linear, module, sequential
+from nn import MLP, batch_norm, dropout, embedding, layer_norm, linear, module, sequential
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
 
@@ -1007,6 +1007,62 @@ def test_batch_norm():
     assert raises(lambda: norm(tensor([[1.0, 2.0, 3.0]])), ValueError)
     assert raises(lambda: norm(rand_tensor(4, 2)), ValueError)
     assert raises(lambda: batch_norm(3, momentum=1.5), ValueError)
+
+
+def test_embedding():
+    random.seed(15)
+    emb = embedding(5, 3)
+    assert emb.weight.shape == (5, 3)
+    assert [name for name, _ in emb.named_parameters()] == ["weight"]
+    row = lambda i: emb.weight.data[3 * i:3 * i + 3]
+
+    out = emb([[4, 0, 4], [2, 2, 1]])
+    assert out.shape == (2, 3, 3)
+    for n, i in enumerate([4, 0, 4, 2, 2, 1]):
+        assert out.data[3 * n:3 * n + 3] == row(i)
+    assert emb(3).shape == (3,) and emb(3).data == row(3)
+    assert emb(tensor([1.0, 0.0])).data == row(1) + row(0)
+
+    # a repeated id gets the grads of every place it was used; unused ids get none
+    emb([1, 1, 2]).sum().backward()
+    assert emb.weight.grad == [0.0] * 3 + [2.0] * 3 + [1.0] * 3 + [0.0] * 6
+
+    ids = [[0, 3], [3, 3]]
+    r = tensor([[[random.uniform(-1, 1) for _ in range(3)] for _ in range(2)] for _ in range(2)])
+    gradcheck(lambda w: (emb(ids) * r).sum(), emb.weight)
+
+    # same values and grads as multiplying one-hot rows by the table
+    flat = [0, 3, 3, 3]
+    one_hot = tensor([[1.0 if c == i else 0.0 for c in range(5)] for i in flat])
+    y = rand_tensor(4, 3)
+    emb.zero_grad()
+    emb(flat).mse_loss(y).backward()
+    lookup_grad = emb.weight.grad[:]
+    emb.zero_grad()
+    product = one_hot @ emb.weight
+    assert product.data == emb(flat).data
+    product.mse_loss(y).backward()
+    assert all(close(a, b) for a, b in zip(lookup_grad, emb.weight.grad))
+
+    # init is standard normal
+    random.seed(16)
+    big = embedding(200, 50).weight.data
+    mean = sum(big) / len(big)
+    assert abs(mean) < 0.03 and abs(sum((v - mean) ** 2 for v in big) / len(big) - 1.0) < 0.05
+
+    # learns: embed each of 4 ids in 2 dims, then a linear layer reads the id back out
+    random.seed(17)
+    model = sequential(embedding(4, 2), linear(2, 4))
+    opt = Adam(model.parameters(), lr=0.1)
+    for _ in range(100):
+        loss = model([0, 1, 2, 3]).log_softmax().nll_loss([0, 1, 2, 3])
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    assert model([0, 1, 2, 3]).accuracy([0, 1, 2, 3]) == 1.0
+
+    for bad in [-1, 5, 1.5, True]:
+        assert raises(lambda: emb([0, bad]), ValueError)
 
 
 if __name__ == "__main__":

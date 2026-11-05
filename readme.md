@@ -33,12 +33,13 @@ Macrograd goes further:
 
 **The Network (`nn`)**
 
-* `module`, `linear`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm` classes.
+* `module`, `linear`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
 * `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
 * `batch_norm(dim)` normalizes each feature over the batch in training and keeps running averages of the mean and variance for `.eval()` mode. The running stats are buffers (listed by `.named_buffers()`, set with `buffer_names`): saved with the weights but never touched by the optimizer.
 * `.parameters()` finds every tensor a module stores, including inside sub-modules and lists, so a custom layer only has to store its tensors. `sequential(layer, ...)` chains modules and plain functions.
 * Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
 * Per-layer activation functions (pass callables) and dropout rates.
+* `embedding(num_embeddings, dim)` is a learned table with one vector per id. Pass integer ids of any shape and get their vectors back, shape `ids.shape + (dim,)`.
 * Dropout layer with `.train()` and `.eval()` modes for training vs. inference.
 * `.save(path)` writes the weights (and buffers) to a JSON file and `.load(path)` reads them back into a model of the same shape. Each tensor is stored under its name from `.named_parameters()`, like `layers.0.w`.
 

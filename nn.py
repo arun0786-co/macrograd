@@ -208,6 +208,30 @@ class sequential(module):
         return "Sequential(\n" + "\n".join(lines) + "\n)"
 
 
+class embedding(module):
+    # a lookup table with one learned vector (row) per id, for tokens or categories.
+    # given integer ids of any shape, returns their rows, shape ids.shape + (dim,).
+    # it gives the same result as one_hot(ids) @ weight without building the one-hot
+    # vectors: forward copies rows, and backward adds each output row's grad into the row
+    # it came from (more than once if an id repeats). indexing with a list already does both
+    def __init__(self, num_embeddings, dim):
+        super().__init__()
+        # standard normal init, like pytorch
+        self.weight = tensor([[random.gauss(0.0, 1.0) for _ in range(dim)] for _ in range(num_embeddings)])
+
+    def __call__(self, ids):
+        ids = ids if isinstance(ids, tensor) else tensor(ids)
+        n, dim = self.weight.shape
+        for i in ids.data:
+            if isinstance(i, bool) or not float(i).is_integer() or not 0 <= i < n:
+                raise ValueError(f"Embedding id {i!r} is not an int in 0..{n - 1}")
+        rows = self.weight[[int(i) for i in ids.data]]
+        return rows.reshape(ids.shape + (dim,))
+
+    def __repr__(self):
+        return f"Embedding({self.weight.shape[0]}, {self.weight.shape[1]})"
+
+
 class layer_norm(module):
     # normalizes each example's features (the last dim) to mean 0 and variance 1, then
     # scales by gamma and shifts by beta, both learned, one per feature. they start at 1
