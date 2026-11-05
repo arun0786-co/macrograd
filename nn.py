@@ -136,6 +136,56 @@ class linear(module):
         return f"Linear(in_features={self.w.shape[0]}, out_features={self.w.shape[1]})"
 
 
+# weight init. each output of x @ w adds up fan_in terms w * x, so its variance is
+# fan_in * var(w) * E[x^2]. picking var(w) to cancel fan_in keeps activations the same
+# size from layer to layer instead of growing or shrinking with depth.
+# these fill a weight in place and return it, e.g. kaiming_normal(layer.w). weights here
+# are (fan_in, fan_out), the way linear stores them (inputs, outputs)
+
+def _fans(w):
+    if len(w.shape) != 2:
+        raise ValueError(f"init expects a 2-d (fan_in, fan_out) weight, got shape {w.shape}")
+    return w.shape[0], w.shape[1]
+
+
+def _fill(w, std, normal):
+    # mean 0 values with the given std. uniform(-a, a) has variance a^2 / 3, so a = sqrt(3) * std
+    if normal:
+        w.data[:] = [random.gauss(0.0, std) for _ in w.data]
+    else:
+        bound = 3 ** 0.5 * std
+        w.data[:] = [random.uniform(-bound, bound) for _ in w.data]
+    return w
+
+
+def xavier_uniform(w, gain=1.0):
+    # Glorot and Bengio (2010). forward, activations keep their size with var(w) = 1 / fan_in;
+    # backward, gradients keep theirs with 1 / fan_out. xavier takes the average of the two:
+    # var(w) = gain^2 * 2 / (fan_in + fan_out). meant for tanh and sigmoid, which are close
+    # to linear near 0
+    fan_in, fan_out = _fans(w)
+    return _fill(w, gain * (2.0 / (fan_in + fan_out)) ** 0.5, normal=False)
+
+
+def xavier_normal(w, gain=1.0):
+    fan_in, fan_out = _fans(w)
+    return _fill(w, gain * (2.0 / (fan_in + fan_out)) ** 0.5, normal=True)
+
+
+def kaiming_uniform(w, negative_slope=0.0):
+    # He et al. (2015), for relu. relu zeroes the negative half of its inputs, so
+    # E[relu(z)^2] = var(z) / 2, and var(w) = 2 / fan_in makes up for that lost half.
+    # for leaky_relu with slope a, the negative half keeps a^2 of its size:
+    # var(w) = 2 / ((1 + a^2) * fan_in)
+    fan_in, _ = _fans(w)
+    return _fill(w, (2.0 / ((1 + negative_slope ** 2) * fan_in)) ** 0.5, normal=False)
+
+
+def kaiming_normal(w, negative_slope=0.0):
+    fan_in, _ = _fans(w)
+    return _fill(w, (2.0 / ((1 + negative_slope ** 2) * fan_in)) ** 0.5, normal=True)
+
+
 class MLP(module):
     def __init__(self, layer_sizes, activation_fns=None, dropout_p=None):
         super().__init__()

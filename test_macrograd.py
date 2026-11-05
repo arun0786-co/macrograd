@@ -6,6 +6,7 @@ import tempfile
 
 from engine import tensor, concat, gradcheck
 from nn import MLP, batch_norm, dropout, embedding, layer_norm, linear, module, sequential
+from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
 
@@ -1063,6 +1064,57 @@ def test_embedding():
 
     for bad in [-1, 5, 1.5, True]:
         assert raises(lambda: emb([0, bad]), ValueError)
+
+
+def test_xavier_and_kaiming_init():
+    random.seed(18)
+
+    def variance(t):
+        mean = math.fsum(t.data) / len(t.data)
+        return math.fsum((v - mean) ** 2 for v in t.data) / len(t.data)
+
+    # (fan_in, fan_out) = (300, 100), 30000 samples, so the variance lands within a few percent
+    shape = (300, 100)
+    blank = lambda: tensor([0.0] * 30000, shape=shape)
+    cases = [
+        (xavier_uniform(blank()), 2 / 400, (6 / 400) ** 0.5),
+        (xavier_uniform(blank(), gain=2.0), 4 * 2 / 400, 2 * (6 / 400) ** 0.5),
+        (xavier_normal(blank()), 2 / 400, None),
+        (kaiming_uniform(blank()), 2 / 300, (6 / 300) ** 0.5),
+        (kaiming_uniform(blank(), negative_slope=0.5), 2 / (1.25 * 300), (6 / (1.25 * 300)) ** 0.5),
+        (kaiming_normal(blank()), 2 / 300, None),
+    ]
+    for w, expected_var, bound in cases:
+        assert abs(variance(w) / expected_var - 1) < 0.05
+        assert abs(math.fsum(w.data) / len(w.data)) < 0.1 * expected_var ** 0.5
+        if bound is not None:
+            assert max(abs(v) for v in w.data) <= bound
+            assert max(abs(v) for v in w.data) > 0.99 * bound
+
+    # fills in place, so a layer's weight can be re-initialized directly
+    layer = linear(4, 3)
+    assert kaiming_normal(layer.w) is layer.w and layer.parameters()[0] is layer.w
+
+    # through 10 relu layers the signal keeps roughly its size with kaiming, but shrinks
+    # about 6x per layer with linear's default (var(w) = 1 / (3 fan_in), then relu halves it).
+    # narrow random layers make the kaiming size wander: 0.06 to 8.5 over seeds 0-99,
+    # against at most 2e-7 with the default
+    random.seed(19)
+    x = tensor([[random.gauss(0.0, 1.0) for _ in range(32)] for _ in range(16)])
+    sizes = []
+    for init in [None, kaiming_normal]:
+        h = x
+        for _ in range(10):
+            layer = linear(32, 32)
+            if init:
+                init(layer.w)
+            h = layer(h).relu()
+        sizes.append(math.fsum(v * v for v in h.data) / len(h.data))
+    assert 0.01 < sizes[1] < 100
+    assert sizes[0] < 1e-5
+
+    for init in [xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal]:
+        assert raises(lambda: init(tensor([1.0, 2.0])), ValueError)
 
 
 if __name__ == "__main__":
