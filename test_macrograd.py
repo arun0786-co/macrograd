@@ -5,7 +5,7 @@ import random
 import tempfile
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, dropout, linear, module, sequential
+from nn import MLP, dropout, layer_norm, linear, module, sequential
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
 
@@ -900,6 +900,43 @@ def test_save_and_load():
         stack.load(path)
         assert [p.data for p in stack.parameters()] == [p.data for p in model.parameters()]
         assert raises(lambda: sequential(linear(3, 4), lambda h: h.relu(), linear(4, 2)).load(path), ValueError)
+
+
+def test_layer_norm():
+    random.seed(13)
+    x = rand_tensor(3, 5) * 4.0 + 1.0
+    out = x.layer_norm()
+    for r in range(3):
+        row = x.data[5 * r:5 * r + 5]
+        mean = math.fsum(row) / 5
+        var = math.fsum((v - mean) ** 2 for v in row) / 5
+        for j in range(5):
+            assert close(out.data[5 * r + j], (row[j] - mean) / math.sqrt(var + 1e-5))
+        assert abs(math.fsum(out.data[5 * r:5 * r + 5])) < 1e-12
+
+    # a constant row has nothing to normalize, and eps keeps it at 0 instead of 0 / 0
+    assert tensor([[2.0, 2.0, 2.0]]).layer_norm().data == [0.0, 0.0, 0.0]
+
+    # the sum of a normalized row is always 0, so weight the outputs to get real gradients
+    r = rand_tensor(3, 5)
+    gradcheck(lambda a: (a.layer_norm() * r).sum(), x)
+    cube = tensor([[[random.uniform(-2, 2) for _ in range(4)] for _ in range(3)] for _ in range(2)])
+    target = tensor([[[random.uniform(-1, 1) for _ in range(4)] for _ in range(3)] for _ in range(2)])
+    gradcheck(lambda a: a.layer_norm(eps=0.1).mse_loss(target), cube)
+
+    # the layer starts as a plain normalization, then gamma and beta get trained
+    norm = layer_norm(5)
+    assert [name for name, _ in norm.named_parameters()] == ["gamma", "beta"]
+    assert norm(x).data == out.data
+    norm.gamma.data = [random.uniform(0.5, 2) for _ in range(5)]
+    norm.beta.data = [random.uniform(-1, 1) for _ in range(5)]
+    y = rand_tensor(3, 5)
+    gradcheck(lambda a, gamma, beta: norm(a).mse_loss(y), x, norm.gamma, norm.beta)
+
+    model = sequential(linear(5, 8), layer_norm(8), lambda h: h.relu(), linear(8, 5))
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+    assert raises(lambda: norm(rand_tensor(3, 4)), ValueError)
 
 
 if __name__ == "__main__":

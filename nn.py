@@ -194,6 +194,25 @@ class sequential(module):
         return "Sequential(\n" + "\n".join(lines) + "\n)"
 
 
+class layer_norm(module):
+    # normalizes each example's features (the last dim) to mean 0 and variance 1, then
+    # scales by gamma and shifts by beta, both learned, one per feature. they start at 1
+    # and 0, so the layer begins as a plain normalization and can learn to undo it
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.gamma = tensor([1.0] * dim)
+        self.beta = tensor([0.0] * dim)
+
+    def __call__(self, x):
+        if not x.shape or x.shape[-1] != self.gamma.shape[0]:
+            raise ValueError(f"layer_norm expects a last dim of {self.gamma.shape[0]}, got shape {x.shape}")
+        return x.layer_norm(self.eps) * self.gamma + self.beta
+
+    def __repr__(self):
+        return f"LayerNorm({self.gamma.shape[0]}, eps={self.eps})"
+
+
 class dropout(module):
     def __init__(self, p=0.5):
         super().__init__()

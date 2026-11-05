@@ -752,6 +752,40 @@ class tensor:
         out._backward = _backward
         return out
 
+    def layer_norm(self, eps=1e-5):
+        # moves each row (the last dim) to mean 0 and variance 1:
+        #   x_hat = (x - mean) / sqrt(var + eps)
+        # eps keeps it finite when every value in a row is the same.
+        # moving x_i changes x_hat_i directly, but also shifts the row's mean (which moves
+        # every x_hat) and its variance (which rescales every x_hat). adding the three up gives
+        #   dL/dx_i = (g_i - mean(g) - x_hat_i * mean(g * x_hat)) / sqrt(var + eps)
+        # where g = dL/dx_hat and both means are over the row
+        C = self.shape[-1] if self.shape else 1
+        out_data = [0.0] * len(self.data)
+        inv_stds = []
+        for start in range(0, len(self.data), C):
+            row = self.data[start:start + C]
+            mean = sum(row) / C
+            var = sum((v - mean) ** 2 for v in row) / C
+            inv_std = (var + eps) ** -0.5
+            inv_stds.append(inv_std)
+            for j in range(C):
+                out_data[start + j] = (row[j] - mean) * inv_std
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='layer_norm')
+
+        def _backward():
+            for r, start in enumerate(range(0, len(self.data), C)):
+                g = out.grad[start:start + C]
+                x_hat = out.data[start:start + C]
+                mean_g = sum(g) / C
+                mean_g_x_hat = sum(a * b for a, b in zip(g, x_hat)) / C
+                for j in range(C):
+                    self.grad[start + j] += (g[j] - mean_g - x_hat[j] * mean_g_x_hat) * inv_stds[r]
+
+        out._backward = _backward
+        return out
+
     def mse_loss(self, target):
         if self.shape != target.shape:
             raise ValueError(f"Shape mismatch in mse_loss: {self.shape} vs {target.shape}")

@@ -26,13 +26,15 @@ Macrograd goes further:
 * Shape ops: `.reshape()` (one dimension can be `-1` and is inferred), `.transpose(dim0, dim1)` (swaps the last two dims by default), indexing with ints, slices and lists of ints (`x[0]`, `x[:, 1:3]`, `x[[2, 0]]`). `concat(tensors, axis)` joins tensors along an axis.
 * Broadcasting like numpy: `+` and `*` line shapes up from the right and repeat size-1 dims, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it directly.
 * Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` and `log_softmax` (per row).
+* Normalization: `.layer_norm(eps)` moves each row (last dim) to mean 0 and variance 1, as one node with its own backward.
 * Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop), `nll_loss(labels)` (integer class labels, use after `log_softmax`), `binary_cross_entropy_with_logits` (sigmoid built in, for yes/no outputs).
 * `accuracy(labels)`: fraction of rows whose highest score is the right class.
 * `gradcheck(f, *inputs)` checks any op's backward pass against finite differences.
 
 **The Network (`nn`)**
 
-* `module`, `linear`, `MLP`, `sequential`, `dropout` classes.
+* `module`, `linear`, `MLP`, `sequential`, `dropout`, `layer_norm` classes.
+* `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
 * `.parameters()` finds every tensor a module stores, including inside sub-modules and lists, so a custom layer only has to store its tensors. `sequential(layer, ...)` chains modules and plain functions.
 * Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
 * Per-layer activation functions (pass callables) and dropout rates.
