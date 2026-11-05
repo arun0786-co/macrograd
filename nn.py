@@ -139,13 +139,17 @@ class linear(module):
 # weight init. each output of x @ w adds up fan_in terms w * x, so its variance is
 # fan_in * var(w) * E[x^2]. picking var(w) to cancel fan_in keeps activations the same
 # size from layer to layer instead of growing or shrinking with depth.
-# these fill a weight in place and return it, e.g. kaiming_normal(layer.w). weights here
-# are (fan_in, fan_out), the way linear stores them (inputs, outputs)
+# these fill a weight in place and return it, e.g. kaiming_normal(layer.w)
 
 def _fans(w):
-    if len(w.shape) != 2:
-        raise ValueError(f"init expects a 2-d (fan_in, fan_out) weight, got shape {w.shape}")
-    return w.shape[0], w.shape[1]
+    # a linear weight is (inputs, outputs). a conv2d weight is (O, C, KH, KW): each output
+    # adds up C * KH * KW inputs, and each input reaches O * KH * KW outputs
+    if len(w.shape) == 2:
+        return w.shape[0], w.shape[1]
+    if len(w.shape) == 4:
+        O, C, KH, KW = w.shape
+        return C * KH * KW, O * KH * KW
+    raise ValueError(f"init expects a linear (fan_in, fan_out) or conv2d (O, C, KH, KW) weight, got shape {w.shape}")
 
 
 def _fill(w, std, normal):
@@ -256,6 +260,29 @@ class sequential(module):
     def __repr__(self):
         lines = [f"  ({i}): {layer}" for i, layer in enumerate(self.layers)]
         return "Sequential(\n" + "\n".join(lines) + "\n)"
+
+
+class conv2d(module):
+    # a layer of out_channels square filters, each kernel_size x kernel_size and covering
+    # all in_channels, slid over (N, in_channels, H, W) images. one bias per filter, stored
+    # as (out_channels, 1, 1) so it broadcasts over every pixel of that filter's output.
+    # init is scaled by fan-in like linear, where fan-in is in_channels * kernel_size^2
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
+        super().__init__()
+        self.stride = stride
+        self.padding = padding
+        shape = (out_channels, in_channels, kernel_size, kernel_size)
+        bound = (in_channels * kernel_size * kernel_size) ** -0.5
+        count = out_channels * in_channels * kernel_size * kernel_size
+        self.w = tensor([random.uniform(-bound, bound) for _ in range(count)], shape=shape)
+        self.b = tensor([0.0] * out_channels, shape=(out_channels, 1, 1))
+
+    def __call__(self, x):
+        return x.conv2d(self.w, self.stride, self.padding) + self.b
+
+    def __repr__(self):
+        O, C, K, _ = self.w.shape
+        return f"Conv2d({C}, {O}, kernel_size={K}, stride={self.stride}, padding={self.padding})"
 
 
 class embedding(module):

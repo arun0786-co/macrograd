@@ -228,6 +228,80 @@ class tensor:
     def __matmul__(self, other):
         return self.matmul(other)
 
+    def conv2d(self, w, stride=1, padding=0):
+        # self is a batch of images (N, C, H, W) and w holds O filters (O, C, KH, KW).
+        # each filter slides over the image, stride pixels at a time, and at every stop
+        # takes the dot product with the patch of the image under it:
+        #   out[n, o, i, j] = sum over c, a, b of x[n, c, i*stride + a - padding, j*stride + b - padding] * w[o, c, a, b]
+        # padding puts a border of zeros around the image, so the filter can also stop at
+        # the edges. output size: (H + 2*padding - KH) // stride + 1, and the same for W.
+        # backward: each product x * w in that sum sends g * w to x and g * x to w, where
+        # g is the output's grad. a filter is used at every stop, so its grads add up
+        if len(self.shape) != 4 or len(w.shape) != 4:
+            raise ValueError(f"conv2d needs (N, C, H, W) images and (O, C, KH, KW) filters, got {self.shape} and {w.shape}")
+        N, C, H, W = self.shape
+        O, C2, KH, KW = w.shape
+        if C != C2:
+            raise ValueError(f"Images have {C} channels but filters expect {C2}")
+        for name, value, low in (("stride", stride, 1), ("padding", padding, 0)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < low:
+                raise ValueError(f"{name} must be an int >= {low}, got {value}")
+        OH = (H + 2 * padding - KH) // stride + 1
+        OW = (W + 2 * padding - KW) // stride + 1
+        if OH < 1 or OW < 1:
+            raise ValueError(f"Filter {KH}x{KW} doesn't fit in a {H}x{W} image with padding {padding}")
+
+        # taps[i * OW + j] lists the products in output pixel (i, j) as pairs of
+        # (position in one image, position in one filter). it is the same for every image
+        # and filter, so it is built once. taps that land in the zero border are left
+        # out, since they would only add 0
+        taps = []
+        for i in range(OH):
+            for j in range(OW):
+                pixel = []
+                for c in range(C):
+                    for a in range(KH):
+                        y = i * stride + a - padding
+                        if not 0 <= y < H:
+                            continue
+                        for b in range(KW):
+                            x = j * stride + b - padding
+                            if 0 <= x < W:
+                                pixel.append(((c * H + y) * W + x, (c * KH + a) * KW + b))
+                taps.append(pixel)
+
+        image_size, filter_size = C * H * W, C * KH * KW
+        out_data = [0.0] * (N * O * OH * OW)
+        k = 0
+        for n in range(N):
+            x0 = n * image_size
+            for o in range(O):
+                w0 = o * filter_size
+                for pixel in taps:
+                    total = 0.0
+                    for xi, wi in pixel:
+                        total += self.data[x0 + xi] * w.data[w0 + wi]
+                    out_data[k] = total
+                    k += 1
+
+        out = tensor(out_data, shape=(N, O, OH, OW), children=(self, w), op='conv2d')
+
+        def _backward():
+            k = 0
+            for n in range(N):
+                x0 = n * image_size
+                for o in range(O):
+                    w0 = o * filter_size
+                    for pixel in taps:
+                        g = out.grad[k]
+                        k += 1
+                        for xi, wi in pixel:
+                            self.grad[x0 + xi] += g * w.data[w0 + wi]
+                            w.grad[w0 + wi] += g * self.data[x0 + xi]
+
+        out._backward = _backward
+        return out
+
     def backward(self):
         # iterative post-order walk, so deep graphs don't hit python's recursion limit
         topo = []

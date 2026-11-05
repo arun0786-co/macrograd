@@ -27,18 +27,20 @@ Macrograd goes further:
 * Broadcasting like numpy: `+` and `*` line shapes up from the right and repeat size-1 dims, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it directly.
 * Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` and `log_softmax` (per row).
 * Normalization: `.layer_norm(eps)` moves each row (last dim) to mean 0 and variance 1, as one node with its own backward.
+* Convolution: `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images, with zero padding around the edges.
 * Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop), `nll_loss(labels)` (integer class labels, use after `log_softmax`), `binary_cross_entropy_with_logits` (sigmoid built in, for yes/no outputs).
 * `accuracy(labels)`: fraction of rows whose highest score is the right class.
 * `gradcheck(f, *inputs)` checks any op's backward pass against finite differences.
 
 **The Network (`nn`)**
 
-* `module`, `linear`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
+* `module`, `linear`, `conv2d`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
+* `conv2d(in_channels, out_channels, kernel_size, stride, padding)` holds square filters and one bias per filter.
 * `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
 * `batch_norm(dim)` normalizes each feature over the batch in training and keeps running averages of the mean and variance for `.eval()` mode. The running stats are buffers (listed by `.named_buffers()`, set with `buffer_names`): saved with the weights but never touched by the optimizer.
 * `.parameters()` finds every tensor a module stores, including inside sub-modules and lists, so a custom layer only has to store its tensors. `sequential(layer, ...)` chains modules and plain functions.
 * Weights stored as matrices, so a whole layer is one matmul. Init is scaled by fan-in.
-* `xavier_uniform`, `xavier_normal` (for tanh and sigmoid) and `kaiming_uniform`, `kaiming_normal` (for relu) re-initialize a weight in place, like `kaiming_normal(layer.w)`, so activations keep their size through deep networks.
+* `xavier_uniform`, `xavier_normal` (for tanh and sigmoid) and `kaiming_uniform`, `kaiming_normal` (for relu) re-initialize a linear or conv2d weight in place, like `kaiming_normal(layer.w)`, so activations keep their size through deep networks.
 * Per-layer activation functions (pass callables) and dropout rates.
 * `embedding(num_embeddings, dim)` is a learned table with one vector per id. Pass integer ids of any shape and get their vectors back, shape `ids.shape + (dim,)`.
 * Dropout layer with `.train()` and `.eval()` modes for training vs. inference.

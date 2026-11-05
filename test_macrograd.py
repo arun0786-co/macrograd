@@ -5,7 +5,7 @@ import random
 import tempfile
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, batch_norm, dropout, embedding, layer_norm, linear, module, sequential
+from nn import MLP, batch_norm, conv2d, dropout, embedding, layer_norm, linear, module, sequential
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
@@ -1115,6 +1115,89 @@ def test_xavier_and_kaiming_init():
 
     for init in [xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal]:
         assert raises(lambda: init(tensor([1.0, 2.0])), ValueError)
+
+
+def rand_shape(*shape, low=-1.0, high=1.0):
+    size = 1
+    for d in shape:
+        size *= d
+    return tensor([random.uniform(low, high) for _ in range(size)], shape=shape)
+
+
+def ref_conv2d(x, w, stride, padding):
+    # straight from the definition, reading 0 outside the image
+    N, C, H, W = x.shape
+    O, _, KH, KW = w.shape
+    def pixel(n, c, y, z):
+        return x.get_element(n, c, y, z) if 0 <= y < H and 0 <= z < W else 0.0
+    OH = (H + 2 * padding - KH) // stride + 1
+    OW = (W + 2 * padding - KW) // stride + 1
+    return [math.fsum(pixel(n, c, i * stride + a - padding, j * stride + b - padding) * w.get_element(o, c, a, b)
+                      for c in range(C) for a in range(KH) for b in range(KW))
+            for n in range(N) for o in range(O) for i in range(OH) for j in range(OW)]
+
+
+def test_conv2d():
+    # a 2x2 filter of ones adds up each 2x2 patch
+    x = tensor([[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]])
+    ones = tensor([[[[1.0, 1.0], [1.0, 1.0]]]])
+    assert x.conv2d(ones).data == [12.0, 16.0, 24.0, 28.0]
+    # with a zero border the corners only see one pixel; stride 2 skips every other stop
+    padded = x.conv2d(ones, padding=1)
+    assert padded.shape == (1, 1, 4, 4) and padded.data[0] == 1.0 and padded.data[15] == 9.0
+    assert x.conv2d(ones, stride=2, padding=1).data == [1.0, 5.0, 11.0, 28.0]
+
+    random.seed(20)
+    for N, C, H, W, O, K, stride, padding in [(2, 2, 5, 4, 3, 3, 1, 1), (1, 3, 6, 6, 2, 2, 2, 0),
+                                              (2, 1, 5, 7, 2, 3, 2, 2), (1, 2, 4, 4, 1, 4, 1, 0)]:
+        x, w = rand_shape(N, C, H, W), rand_shape(O, C, K, K)
+        out = x.conv2d(w, stride, padding)
+        OH, OW = (H + 2 * padding - K) // stride + 1, (W + 2 * padding - K) // stride + 1
+        assert out.shape == (N, O, OH, OW)
+        assert all(close(a, b) for a, b in zip(out.data, ref_conv2d(x, w, stride, padding)))
+
+    # a filter as big as the image is one dot product per filter: a matmul on the flat image
+    x, w = rand_shape(3, 2, 4, 4), rand_shape(5, 2, 4, 4)
+    as_matmul = x.reshape(3, 32) @ w.reshape(5, 32).transpose()
+    assert all(close(a, b) for a, b in zip(x.conv2d(w).data, as_matmul.data))
+    # a 1x1 filter mixes the channels at each pixel, like a linear layer on every pixel
+    w = rand_shape(4, 2, 1, 1)
+    # (N, C, H, W) -> (N, W, H, C), one pixel per row, matmul, then back to (N, O, H, W)
+    pixels = x.transpose(1, 3).reshape(48, 2)
+    per_pixel = (pixels @ w.reshape(4, 2).transpose()).reshape(3, 4, 4, 4).transpose(1, 3)
+    assert all(close(a, b) for a, b in zip(x.conv2d(w).data, per_pixel.data))
+
+    x, w = rand_shape(2, 2, 4, 5), rand_shape(3, 2, 3, 3)
+    for stride, padding in [(1, 0), (1, 1), (2, 1)]:
+        r = rand_shape(*x.conv2d(w, stride, padding).shape)
+        gradcheck(lambda a, f: (a.conv2d(f, stride, padding) * r).sum(), x, w)
+
+    # the layer: one bias per filter, added to every pixel of that filter's output
+    layer = conv2d(2, 3, kernel_size=3, padding=1)
+    assert [name for name, _ in layer.named_parameters()] == ["w", "b"]
+    assert layer.w.shape == (3, 2, 3, 3) and max(abs(v) for v in layer.w.data) <= 18 ** -0.5
+    layer.b.data = [1.0, -2.0, 0.5]
+    out, plain = layer(x), x.conv2d(layer.w, padding=1)
+    for k in range(len(out.data)):
+        assert close(out.data[k], plain.data[k] + layer.b.data[(k // 20) % 3])
+
+    model = sequential(conv2d(2, 3, 3, padding=1), lambda h: h.relu(), conv2d(3, 2, 2, stride=2))
+    y = rand_shape(2, 2, 2, 2)
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+    # init works on conv weights, with fan-in C * K * K = 144 and fan-out O * K * K = 900
+    w = tensor([0.0] * 14400, shape=(100, 16, 3, 3))
+    for init, expected in [(kaiming_normal, 2 / 144), (xavier_uniform, 2 / (144 + 900))]:
+        init(w)
+        mean = math.fsum(w.data) / len(w.data)
+        assert abs(math.fsum((v - mean) ** 2 for v in w.data) / len(w.data) / expected - 1) < 0.05
+
+    image, filters = rand_shape(1, 2, 3, 3), rand_shape(1, 2, 2, 2)
+    assert raises(lambda: image.conv2d(rand_shape(1, 3, 2, 2)), ValueError)
+    assert raises(lambda: image.conv2d(rand_shape(1, 2, 4, 4)), ValueError)
+    assert raises(lambda: image.conv2d(filters, stride=0), ValueError)
+    assert raises(lambda: image.conv2d(filters, padding=-1), ValueError)
+    assert raises(lambda: rand_shape(2, 3, 3).conv2d(filters), ValueError)
 
 
 if __name__ == "__main__":
