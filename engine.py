@@ -302,6 +302,67 @@ class tensor:
         out._backward = _backward
         return out
 
+    def max_pool2d(self, kernel_size, stride=None):
+        # cuts each channel of (N, C, H, W) images into kernel_size x kernel_size windows,
+        # stride pixels apart, and keeps the largest value in each. stride defaults to
+        # kernel_size, so the windows sit side by side and a 2x2 pool halves H and W.
+        # output size: (H - kernel_size) // stride + 1, and the same for W.
+        # like max, only the largest value in a window decides the output, so backward sends
+        # each grad to that one position (the first one on ties). when windows overlap, a
+        # value can win more than one and gets the grads of all of them
+        if len(self.shape) != 4:
+            raise ValueError(f"max_pool2d needs (N, C, H, W) images, got shape {self.shape}")
+        if stride is None:
+            stride = kernel_size
+        for name, value in (("kernel_size", kernel_size), ("stride", stride)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be an int >= 1, got {value}")
+        N, C, H, W = self.shape
+        K = kernel_size
+        OH = (H - K) // stride + 1
+        OW = (W - K) // stride + 1
+        if OH < 1 or OW < 1:
+            raise ValueError(f"Window {K}x{K} doesn't fit in a {H}x{W} image")
+
+        # positions[k] is where in self.data output value k was copied from
+        positions = []
+        for nc in range(N * C):
+            base = nc * H * W
+            for i in range(OH):
+                for j in range(OW):
+                    corner = base + i * stride * W + j * stride
+                    best = corner
+                    for a in range(K):
+                        for b in range(K):
+                            p = corner + a * W + b
+                            if self.data[p] > self.data[best]:
+                                best = p
+                    positions.append(best)
+
+        out = tensor([self.data[p] for p in positions], shape=(N, C, OH, OW), children=(self,), op='max_pool2d')
+
+        def _backward():
+            for k, p in enumerate(positions):
+                self.grad[p] += out.grad[k]
+
+        out._backward = _backward
+        return out
+
+    def flatten(self, start_dim=0):
+        # joins every dim from start_dim on into one: an (N, C, H, W) batch of images
+        # becomes (N, C * H * W) with flatten(1), ready for a linear layer.
+        # it is a reshape, so the values keep their order
+        n = len(self.shape)
+        if n == 0:
+            return self.reshape(1)
+        if not -n <= start_dim < n:
+            raise IndexError(f"start_dim {start_dim} out of range for shape {self.shape}")
+        start_dim %= n
+        size = 1
+        for d in self.shape[start_dim:]:
+            size *= d
+        return self.reshape(self.shape[:start_dim] + (size,))
+
     def backward(self):
         # iterative post-order walk, so deep graphs don't hit python's recursion limit
         topo = []

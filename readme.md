@@ -28,14 +28,16 @@ Macrograd goes further:
 * Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (tanh approximation), `softmax` and `log_softmax` (per row).
 * Normalization: `.layer_norm(eps)` moves each row (last dim) to mean 0 and variance 1, as one node with its own backward.
 * Convolution: `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images, with zero padding around the edges.
+* Pooling: `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel. `.flatten(start_dim)` joins the dims from `start_dim` on into one.
 * Loss: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, single-node backprop), `nll_loss(labels)` (integer class labels, use after `log_softmax`), `binary_cross_entropy_with_logits` (sigmoid built in, for yes/no outputs).
 * `accuracy(labels)`: fraction of rows whose highest score is the right class.
 * `gradcheck(f, *inputs)` checks any op's backward pass against finite differences.
 
 **The Network (`nn`)**
 
-* `module`, `linear`, `conv2d`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
+* `module`, `linear`, `conv2d`, `max_pool2d`, `flatten`, `MLP`, `sequential`, `dropout`, `layer_norm`, `batch_norm`, `embedding` classes.
 * `conv2d(in_channels, out_channels, kernel_size, stride, padding)` holds square filters and one bias per filter.
+* `max_pool2d(kernel_size)` and `flatten()` (keeps the batch dim) wrap the tensor ops as layers, so `sequential(conv2d(1, 8, 3, padding=1), relu, max_pool2d(2), flatten(), linear(...))` is a small CNN.
 * `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
 * `batch_norm(dim)` normalizes each feature over the batch in training and keeps running averages of the mean and variance for `.eval()` mode. The running stats are buffers (listed by `.named_buffers()`, set with `buffer_names`): saved with the weights but never touched by the optimizer.
 * `.parameters()` finds every tensor a module stores, including inside sub-modules and lists, so a custom layer only has to store its tensors. `sequential(layer, ...)` chains modules and plain functions.

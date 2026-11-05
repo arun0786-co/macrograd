@@ -285,6 +285,34 @@ class conv2d(module):
         return f"Conv2d({C}, {O}, kernel_size={K}, stride={self.stride}, padding={self.padding})"
 
 
+class max_pool2d(module):
+    # keeps the largest value in each kernel_size x kernel_size window of every channel
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+
+    def __call__(self, x):
+        return x.max_pool2d(self.kernel_size, self.stride)
+
+    def __repr__(self):
+        return f"MaxPool2d(kernel_size={self.kernel_size}, stride={self.stride or self.kernel_size})"
+
+
+class flatten(module):
+    # joins every dim from start_dim on, so (N, C, H, W) conv outputs become (N, C * H * W)
+    # rows for a linear layer. start_dim=1 keeps the batch dim
+    def __init__(self, start_dim=1):
+        super().__init__()
+        self.start_dim = start_dim
+
+    def __call__(self, x):
+        return x.flatten(self.start_dim)
+
+    def __repr__(self):
+        return f"Flatten(start_dim={self.start_dim})"
+
+
 class embedding(module):
     # a lookup table with one learned vector (row) per id, for tokens or categories.
     # given integer ids of any shape, returns their rows, shape ids.shape + (dim,).

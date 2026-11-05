@@ -5,7 +5,7 @@ import random
 import tempfile
 
 from engine import tensor, concat, gradcheck
-from nn import MLP, batch_norm, conv2d, dropout, embedding, layer_norm, linear, module, sequential
+from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, sequential
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
@@ -1198,6 +1198,69 @@ def test_conv2d():
     assert raises(lambda: image.conv2d(filters, stride=0), ValueError)
     assert raises(lambda: image.conv2d(filters, padding=-1), ValueError)
     assert raises(lambda: rand_shape(2, 3, 3).conv2d(filters), ValueError)
+
+
+def test_max_pool2d_and_flatten():
+    x = tensor([[[[1.0, 3.0, 2.0, 0.0],
+                  [4.0, 2.0, 1.0, 5.0],
+                  [0.0, 1.0, 9.0, 8.0],
+                  [7.0, 6.0, 3.0, 2.0]]]])
+    out = x.max_pool2d(2)
+    assert out.shape == (1, 1, 2, 2) and out.data == [4.0, 5.0, 7.0, 9.0]
+
+    # each grad goes to the winner of its window only
+    (out * tensor([[[[1.0, 2.0], [3.0, 4.0]]]])).sum().backward()
+    assert x.grad == [0.0, 0.0, 0.0, 0.0,
+                      1.0, 0.0, 0.0, 2.0,
+                      0.0, 0.0, 4.0, 0.0,
+                      3.0, 0.0, 0.0, 0.0]
+
+    # overlapping windows (stride 1): the 9 wins all four windows and gets all four grads
+    x = tensor([[[[1.0, 2.0, 0.0], [3.0, 9.0, 4.0], [0.0, 5.0, 1.0]]]])
+    out = x.max_pool2d(2, stride=1)
+    assert out.data == [9.0] * 4
+    out.sum().backward()
+    assert x.grad[4] == 4.0 and sum(x.grad) == 4.0
+
+    # on a tie the first value wins
+    x = tensor([[[[2.0, 2.0], [2.0, 2.0]]]])
+    x.max_pool2d(2).sum().backward()
+    assert x.grad == [1.0, 0.0, 0.0, 0.0]
+
+    random.seed(21)
+    for N, C, H, W, K, stride in [(2, 3, 5, 6, 2, None), (1, 2, 7, 7, 3, 2), (2, 1, 4, 5, 2, 1)]:
+        x = rand_shape(N, C, H, W)
+        S = stride or K
+        out = x.max_pool2d(K, stride)
+        OH, OW = (H - K) // S + 1, (W - K) // S + 1
+        assert out.shape == (N, C, OH, OW)
+        expected = [max(x.get_element(n, c, i * S + a, j * S + b) for a in range(K) for b in range(K))
+                    for n in range(N) for c in range(C) for i in range(OH) for j in range(OW)]
+        assert out.data == expected
+        r = rand_shape(N, C, OH, OW)
+        gradcheck(lambda a: (a.max_pool2d(K, stride) * r).sum(), x)
+
+    # flatten is a reshape that keeps the order of the values
+    x = rand_shape(2, 3, 4, 5)
+    assert x.flatten().shape == (120,) and x.flatten().data == x.data
+    assert x.flatten(1).shape == (2, 60) and x.flatten(2).shape == (2, 3, 20)
+    assert x.flatten(-1).shape == (2, 3, 4, 5) and tensor(3.0).flatten().shape == (1,)
+    r = rand_shape(2, 60)
+    gradcheck(lambda a: (a.flatten(1) * r).sum(), x)
+
+    # conv, pool, flatten, linear: images in, one row of scores per image out
+    model = sequential(conv2d(3, 4, 3, padding=1), lambda h: h.relu(), max_pool2d(2),
+                       flatten(), linear(4 * 2 * 2, 3))
+    assert max_pool2d(2).parameters() == [] and flatten().parameters() == []
+    x = rand_shape(2, 3, 4, 5)
+    assert model(x).shape == (2, 3)
+    y = rand_shape(2, 3)
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+    assert raises(lambda: rand_shape(3, 4, 4).max_pool2d(2), ValueError)
+    assert raises(lambda: rand_shape(1, 1, 2, 2).max_pool2d(3), ValueError)
+    assert raises(lambda: rand_shape(1, 1, 4, 4).max_pool2d(2, stride=0), ValueError)
+    assert raises(lambda: x.flatten(4), IndexError)
 
 
 if __name__ == "__main__":
