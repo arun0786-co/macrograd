@@ -8,7 +8,7 @@ import random
 import time
 import urllib.request
 
-from engine import tensor
+from engine import tensor, no_grad
 from nn import module, embedding, transformer_block, layer_norm, linear, sample
 from optim import AdamW, CosineAnnealingLR
 
@@ -77,16 +77,18 @@ def loss_on(model, inputs, targets):
 
 
 def evaluate(model, batches):
-    return sum(loss_on(model, x, y).data[0] for x, y in batches) / len(batches)
+    with no_grad():
+        return sum(loss_on(model, x, y).data[0] for x, y in batches) / len(batches)
 
 
 def generate(model, ids, length, temperature=0.8, top_k=None):
     ids = list(ids)
-    for _ in range(length):
-        # only the last CONTEXT characters fit, and only the scores at the last position
-        # are about the character that comes next
-        scores = model([ids[-model.context:]])[:, -1]
-        ids.append(sample(scores, temperature, top_k)[0])
+    with no_grad():
+        for _ in range(length):
+            # only the last CONTEXT characters fit, and only the scores at the last position
+            # are about the character that comes next
+            scores = model([ids[-model.context:]])[:, -1]
+            ids.append(sample(scores, temperature, top_k)[0])
     return ids
 
 

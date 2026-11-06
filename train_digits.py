@@ -7,7 +7,7 @@ import random
 import time
 import urllib.request
 
-from engine import tensor
+from engine import tensor, no_grad
 from nn import sequential, conv2d, max_pool2d, flatten, linear, kaiming_normal
 from optim import AdamW, CosineAnnealingLR
 from data import batches
@@ -55,12 +55,13 @@ def make_model():
 
 
 def evaluate(model, images, labels):
-    # in chunks, so the graph for all test images isn't held at once
+    # in chunks, so each layer's output for all test images isn't held at once
     correct, loss_sum = 0, 0.0
-    for xb, yb in batches(images, labels, batch_size=256, shuffle=False):
-        scores = model(xb)
-        loss_sum += scores.log_softmax().nll_loss(yb).data[0] * len(yb)
-        correct += round(scores.accuracy(yb) * len(yb))
+    with no_grad():
+        for xb, yb in batches(images, labels, batch_size=256, shuffle=False):
+            scores = model(xb)
+            loss_sum += scores.log_softmax().nll_loss(yb).data[0] * len(yb)
+            correct += round(scores.accuracy(yb) * len(yb))
     return loss_sum / len(labels), correct / len(labels)
 
 

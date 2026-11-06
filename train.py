@@ -1,4 +1,4 @@
-from engine import tensor
+from engine import tensor, no_grad
 from nn import MLP
 from optim import Adam
 from visualize import draw_dot
@@ -42,7 +42,8 @@ for k in range(epochs):
         print(f"Ep {k:<3} | loss: {loss.data[0]:.4f}")
 
 model.eval()
-y_pred = model(X)
+with no_grad():
+    y_pred = model(X)
 print("\n--- all done — train finished ---")
 print("tgt: [1.0, -1.0, -1.0, 1.0]")
 print("out:", [round(val, 4) for val in y_pred.data])

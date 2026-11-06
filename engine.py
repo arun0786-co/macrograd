@@ -1145,10 +1145,12 @@ def gradcheck(f, *inputs, eps=1e-6, atol=1e-5, rtol=1e-4):
     for n, x in enumerate(inputs):
         for i in range(len(x.data)):
             old = x.data[i]
-            x.data[i] = old + eps
-            up = f(*inputs).data[0]
-            x.data[i] = old - eps
-            down = f(*inputs).data[0]
+            # these runs only read the output, so they don't need a graph
+            with no_grad():
+                x.data[i] = old + eps
+                up = f(*inputs).data[0]
+                x.data[i] = old - eps
+                down = f(*inputs).data[0]
             x.data[i] = old
 
             numeric = (up - down) / (2 * eps)
