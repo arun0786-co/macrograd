@@ -68,6 +68,7 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 - Losses: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, one node in the graph), `nll_loss(labels)` for integer labels after `log_softmax`, and `binary_cross_entropy_with_logits` for yes/no outputs, with the sigmoid built in.
 - `accuracy(labels)` is the fraction of rows whose highest score is the right class.
 - `gradcheck(f, *inputs)` checks any backward pass against finite differences.
+- Inside `with no_grad():` ops don't record the graph, so nothing made in the block keeps its inputs alive. Use it when you only read `.data`, like when evaluating a model or generating text. A tensor made inside is a constant to any later `backward()`.
 
 ### nn.py
 

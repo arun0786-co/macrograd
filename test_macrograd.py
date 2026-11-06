@@ -1,10 +1,12 @@
+import gc
 import json
 import math
 import os
 import random
 import tempfile
+import weakref
 
-from engine import tensor, concat, gradcheck
+from engine import tensor, concat, gradcheck, no_grad
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
@@ -1624,6 +1626,79 @@ def test_sample():
     assert raises(lambda: sample(tensor(2.0)), ValueError)
     assert raises(lambda: sample(tensor([[z]])), ValueError)
     assert raises(lambda: sample(tensor([[0.0, 1.0], [inf, inf]])), ValueError)
+
+
+def test_no_grad():
+    random.seed(0)
+    x = tensor([[0.5, -1.0, 2.0], [1.5, 0.3, -0.7]])
+    w = tensor([[0.2, -0.4], [1.1, 0.6], [-0.3, 0.9]])
+    f = lambda: ((x @ w).tanh() * 2.0 + 1.0).log_softmax().sum()
+    expected = f().data
+
+    # same values, but no graph: the result has no inputs and backward() reaches nothing
+    with no_grad():
+        assert not tensor.grad_enabled
+        out = f()
+    assert tensor.grad_enabled
+    assert out.data == expected
+    assert out._prev == set() and out._op == ''
+    out._backward()
+    out.backward()
+    assert x.grad == [0.0] * 6 and w.grad == [0.0] * 6
+
+    # a result made inside is a constant to a graph built later
+    with no_grad():
+        c = x * 3.0
+    y = tensor([[1.0, 2.0, -1.0], [0.5, -0.5, 4.0]])
+    (c * y).sum().backward()
+    assert y.grad == c.data
+    assert x.grad == [0.0] * 6
+
+    # a graph built outside still backpropagates inside
+    y.grad = [0.0] * 6
+    loss = (x * y).sum()
+    with no_grad():
+        loss.backward()
+    assert x.grad == y.data and y.grad == x.data
+
+    # the old setting comes back after nested blocks and after an error
+    with no_grad():
+        with no_grad():
+            pass
+        assert not tensor.grad_enabled
+    assert tensor.grad_enabled
+    try:
+        with no_grad():
+            raise KeyError("boom")
+    except KeyError:
+        pass
+    assert tensor.grad_enabled
+
+    # without the graph, a result doesn't keep its inputs alive
+    a = tensor([1.0, 2.0])
+    kept = weakref.ref(a)
+    b = (a * 2.0).exp()
+    del a
+    gc.collect()
+    assert kept() is not None
+    a = tensor([1.0, 2.0])
+    gone = weakref.ref(a)
+    with no_grad():
+        b = (a * 2.0).exp()
+    del a
+    gc.collect()
+    assert gone() is None
+    assert all(close(v, math.exp(2.0 * k)) for v, k in zip(b.data, [1.0, 2.0]))
+
+    # a whole model gives the same output, and its parameters get no grads
+    block = transformer_block(8, 2)
+    h = tensor([[[random.uniform(-1, 1) for _ in range(8)] for _ in range(3)] for _ in range(2)])
+    expected = block(h, causal=True).data
+    with no_grad():
+        out = block(h, causal=True)
+    assert out.data == expected and out._prev == set()
+    out.sum().backward()
+    assert all(g == 0.0 for p in block.parameters() for g in p.grad)
 
 
 if __name__ == "__main__":
