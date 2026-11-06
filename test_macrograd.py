@@ -6,7 +6,7 @@ import random
 import tempfile
 import weakref
 
-from engine import tensor, concat, gradcheck, no_grad
+from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
@@ -1637,9 +1637,9 @@ def test_no_grad():
 
     # same values, but no graph: the result has no inputs and backward() reaches nothing
     with no_grad():
-        assert not tensor.grad_enabled
+        assert not is_grad_enabled()
         out = f()
-    assert tensor.grad_enabled
+    assert is_grad_enabled()
     assert out.data == expected
     assert out._prev == set() and out._op == ''
     out._backward()
@@ -1665,14 +1665,19 @@ def test_no_grad():
     with no_grad():
         with no_grad():
             pass
-        assert not tensor.grad_enabled
-    assert tensor.grad_enabled
+        assert not is_grad_enabled()
+    assert is_grad_enabled()
     try:
         with no_grad():
             raise KeyError("boom")
     except KeyError:
         pass
-    assert tensor.grad_enabled
+    assert is_grad_enabled()
+
+    # switching must not write to the tensor class, see the comment on _grad_enabled
+    before = dict(vars(tensor))
+    with no_grad():
+        assert dict(vars(tensor)) == before
 
     # without the graph, a result doesn't keep its inputs alive
     a = tensor([1.0, 2.0])

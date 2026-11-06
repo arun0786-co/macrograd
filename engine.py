@@ -1,7 +1,16 @@
-class tensor:
-    # ops record the graph only while this is True. no_grad() switches it off
-    grad_enabled = True
+# ops record the graph only while this is True. no_grad() switches it off.
+# it's a module variable, not a tensor class attribute, because python resets its
+# attribute caches for a class whenever one of its class attributes changes, and after
+# about a thousand changes it stops caching that class. gradcheck switches this twice
+# per input value, and tensor methods ran about 50% slower once that limit was hit
+_grad_enabled = True
 
+
+def is_grad_enabled():
+    return _grad_enabled
+
+
+class tensor:
     def __init__(self, data, shape=None, children=(), op=''):
         if shape is None:
             flat_data, inferred_shape = self._parse_input(data)
@@ -22,8 +31,8 @@ class tensor:
         self.strides = self._compute_strides(self.shape)
         # inside no_grad() a result keeps no link to its inputs, so it's a constant:
         # backward() stops at it, and the inputs can be freed once nothing else uses them
-        self._prev = set(children) if tensor.grad_enabled else set()
-        self._op = op if tensor.grad_enabled else ''
+        self._prev = set(children) if _grad_enabled else set()
+        self._op = op if _grad_enabled else ''
         self._backward = lambda: None
 
     @property
@@ -35,7 +44,7 @@ class tensor:
         # every op sets out._backward = _backward right after making out. that function
         # adds to the inputs' grads, so it holds on to the inputs as well. inside no_grad()
         # it's dropped and out keeps one that does nothing
-        self._backward_fn = fn if tensor.grad_enabled else (lambda: None)
+        self._backward_fn = fn if _grad_enabled else (lambda: None)
 
     @staticmethod
     def _taylor_exp(x, terms=15):
@@ -1122,13 +1131,15 @@ class no_grad:
     # model.eval() is a separate switch that changes what dropout and batch norm do, so
     # evaluation usually wants both
     def __enter__(self):
-        self.was_enabled = tensor.grad_enabled
-        tensor.grad_enabled = False
+        global _grad_enabled
+        self.was_enabled = _grad_enabled
+        _grad_enabled = False
 
     def __exit__(self, *exc):
         # runs even when the block raises. restoring the old setting instead of turning
         # recording back on keeps nested no_grad() blocks working
-        tensor.grad_enabled = self.was_enabled
+        global _grad_enabled
+        _grad_enabled = self.was_enabled
 
 
 def gradcheck(f, *inputs, eps=1e-6, atol=1e-5, rtol=1e-4):
