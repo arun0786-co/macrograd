@@ -91,6 +91,35 @@ def test_gelu():
     gradcheck(lambda a: a.gelu().sum(), tensor([-3.0, -1.0, -0.2, 0.0, 0.4, 1.5, 3.0]))
 
 
+def test_silu():
+    points = [-1000.0, -20.0, -3.0, -1.0, -0.2, 0.0, 0.5, 1.0, 3.0, 20.0, 1000.0]
+    for x in points:
+        assert close(tensor([x]).silu().data[0], x * ref_sigmoid(x)), x
+
+    # grads against s * (1 + x * (1 - s)) worked out with math, and against finite differences
+    a = tensor(points)
+    weights = [0.5 * k - 2.0 for k in range(len(points))]
+    (a.silu() * tensor(weights)).sum().backward()
+    for x, w, g in zip(points, weights, a.grad):
+        s = ref_sigmoid(x)
+        assert close(g, w * s * (1 + x * (1 - s))), x
+    assert a.grad[0] == 0.0 and a.grad[-1] == weights[-1]
+    gradcheck(lambda a: (a.silu() * tensor(weights[1:-1])).sum(), tensor(points[1:-1]))
+    # a is used twice here, so the grads from both uses have to add up
+    gradcheck(lambda a: (a.silu() * a).sum(), tensor(points[1:-1]))
+
+    # the dip: the lowest value is about -0.278, near x = -1.278, where the slope is 0
+    dip = tensor([-1.2784645])
+    assert close(dip.silu().data[0], -0.2784645, rel=1e-6)
+    dip.silu().backward()
+    assert abs(dip.grad[0]) < 1e-6
+
+    random.seed(3)
+    model = MLP([3, 5, 2], activation_fns=[lambda x: x.silu()])
+    x, y = rand_tensor(4, 3), rand_tensor(4, 2)
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+
 def test_softmax_per_row():
     logits = [[1.0, 2.0, 3.0], [1000.0, 0.0, -1000.0]]
     out = tensor(logits).softmax()
