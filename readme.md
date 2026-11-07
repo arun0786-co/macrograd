@@ -62,7 +62,7 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 - `+` and `*` broadcast like numpy. Shapes line up from the right and size-1 dims repeat, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it explicitly.
 - Reductions: `.sum`, `.mean`, `.var`, `.max` and `.argmax` take `axis` and `keepdim` and reduce everything by default. There's also `.std()`.
 - Shapes: `.reshape()` (one dim can be `-1`), `.transpose(dim0, dim1)` (the last two dims by default), `.flatten(start_dim)` and `concat(tensors, axis)`. Indexing takes ints, slices and lists of ints: `x[0]`, `x[:, 1:3]`, `x[[2, 0]]`.
-- Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (the tanh approximation), and `softmax` and `log_softmax` over each row.
+- Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (the tanh approximation), `silu` (`x * sigmoid(x)`, also called swish), and `softmax` and `log_softmax` over each row.
 - `.layer_norm(eps)` moves each row to mean 0 and variance 1, as one node with a handwritten backward.
 - `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images and zero-pads the edges. `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel.
 - Losses: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, one node in the graph), `nll_loss(labels)` for integer labels after `log_softmax`, and `binary_cross_entropy_with_logits` for yes/no outputs, with the sigmoid built in.

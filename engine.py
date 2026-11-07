@@ -1080,7 +1080,27 @@ class tensor:
                 du_dx = k * (1.0 + 3 * 0.044715 * x * x)
                 local_grad = 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du_dx
                 self.grad[i] += local_grad * out.grad[i]
-                
+
+        out._backward = _backward
+        return out
+
+    def silu(self):
+        # silu(x) = x * sigmoid(x), also called swish. smooth like gelu: about x for big x,
+        # about 0 for very negative x, with a small dip below 0 in between.
+        # with s = sigmoid(x), the product rule and ds/dx = s * (1 - s) give
+        # d/dx = s + x * s * (1 - s) = s * (1 + x * (1 - s))
+        out_data = [0.0] * len(self.data)
+        for i in range(len(self.data)):
+            out_data[i] = self.data[i] * self._sigmoid(self.data[i])
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='silu')
+
+        def _backward():
+            for i in range(len(self.data)):
+                x = self.data[i]
+                s = self._sigmoid(x)
+                self.grad[i] += s * (1.0 + x * (1.0 - s)) * out.grad[i]
+
         out._backward = _backward
         return out
 
