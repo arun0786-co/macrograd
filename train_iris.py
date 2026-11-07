@@ -5,7 +5,7 @@ import os
 import random
 import urllib.request
 
-from engine import tensor
+from engine import tensor, no_grad
 from nn import MLP
 from optim import AdamW, CosineAnnealingLR
 from data import batches
@@ -60,8 +60,9 @@ def standardize(train_x, test_x):
 
 def evaluate(model, x, labels):
     model.eval()
-    scores = model(x)
-    loss = scores.log_softmax().nll_loss(labels).data[0]
+    with no_grad():
+        scores = model(x)
+        loss = scores.log_softmax().nll_loss(labels).data[0]
     model.train()
     return loss, scores.accuracy(labels)
 

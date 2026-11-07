@@ -1,3 +1,15 @@
+# ops record the graph only while this is True. no_grad() switches it off.
+# it's a module variable, not a tensor class attribute, because python resets its
+# attribute caches for a class whenever one of its class attributes changes, and after
+# about a thousand changes it stops caching that class. gradcheck switches this twice
+# per input value, and tensor methods ran about 50% slower once that limit was hit
+_grad_enabled = True
+
+
+def is_grad_enabled():
+    return _grad_enabled
+
+
 class tensor:
     def __init__(self, data, shape=None, children=(), op=''):
         if shape is None:
@@ -17,9 +29,22 @@ class tensor:
         self.grad = [0.0] * len(self.data)
         
         self.strides = self._compute_strides(self.shape)
-        self._prev = set(children)
-        self._op = op
+        # inside no_grad() a result keeps no link to its inputs, so it's a constant:
+        # backward() stops at it, and the inputs can be freed once nothing else uses them
+        self._prev = set(children) if _grad_enabled else set()
+        self._op = op if _grad_enabled else ''
         self._backward = lambda: None
+
+    @property
+    def _backward(self):
+        return self._backward_fn
+
+    @_backward.setter
+    def _backward(self, fn):
+        # every op sets out._backward = _backward right after making out. that function
+        # adds to the inputs' grads, so it holds on to the inputs as well. inside no_grad()
+        # it's dropped and out keeps one that does nothing
+        self._backward_fn = fn if _grad_enabled else (lambda: None)
 
     @staticmethod
     def _taylor_exp(x, terms=15):
@@ -1095,6 +1120,28 @@ def concat(tensors, axis=0):
     return out
 
 
+class no_grad:
+    # runs ops without recording the graph:
+    #   with no_grad():
+    #       scores = model(x)
+    # the graph is only needed for backward(). evaluating a model or generating text only
+    # reads .data, and the graph would keep every tensor made along the way alive until
+    # the result is dropped. results made inside are constants: if a later graph uses one,
+    # backward() treats it as plain data and sends no grads past it.
+    # model.eval() is a separate switch that changes what dropout and batch norm do, so
+    # evaluation usually wants both
+    def __enter__(self):
+        global _grad_enabled
+        self.was_enabled = _grad_enabled
+        _grad_enabled = False
+
+    def __exit__(self, *exc):
+        # runs even when the block raises. restoring the old setting instead of turning
+        # recording back on keeps nested no_grad() blocks working
+        global _grad_enabled
+        _grad_enabled = self.was_enabled
+
+
 def gradcheck(f, *inputs, eps=1e-6, atol=1e-5, rtol=1e-4):
     # checks backward() against central finite differences: nudge each input value
     # up and down by eps and measure how much the output moves, (f(x+eps) - f(x-eps)) / 2eps.
@@ -1109,10 +1156,12 @@ def gradcheck(f, *inputs, eps=1e-6, atol=1e-5, rtol=1e-4):
     for n, x in enumerate(inputs):
         for i in range(len(x.data)):
             old = x.data[i]
-            x.data[i] = old + eps
-            up = f(*inputs).data[0]
-            x.data[i] = old - eps
-            down = f(*inputs).data[0]
+            # these runs only read the output, so they don't need a graph
+            with no_grad():
+                x.data[i] = old + eps
+                up = f(*inputs).data[0]
+                x.data[i] = old - eps
+                down = f(*inputs).data[0]
             x.data[i] = old
 
             numeric = (up - down) / (2 * eps)
