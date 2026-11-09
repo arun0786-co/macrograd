@@ -439,6 +439,64 @@ class rnn_cell(module):
         return f"RNNCell({self.w_x.shape[0]}, {self.w_x.shape[1]})"
 
 
+class lstm_cell(module):
+    # one step of a long short-term memory network (Hochreiter and Schmidhuber, 1997, with
+    # the forget gate from Gers et al., 2000). besides the hidden state h it carries a cell
+    # state c, and four gates, computed from x_t and h_(t-1), decide how c changes:
+    #   i = sigmoid(...)   input gate, how much of the candidate to write into c
+    #   f = sigmoid(...)   forget gate, how much of the old c to keep
+    #   g = tanh(...)      candidate values to write
+    #   o = sigmoid(...)   output gate, how much of c to show in h
+    #   c_t = f * c_(t-1) + i * g
+    #   h_t = o * tanh(c_t)
+    # each "..." is x_t @ w_x + h_(t-1) @ w_h + b. all four are computed by one matmul into
+    # (N, 4 * hidden_size) columns, in the order i, f, g, o as in pytorch, then cut apart.
+    # from one step to the next c is only multiplied by f and added to, with no tanh in
+    # between, so dc_t/dc_(t-1) = f. while f stays near 1 the gradient goes back through
+    # many steps without shrinking. in rnn_cell it gets multiplied by tanh' and w_h at
+    # every step instead, which usually makes it fade over long sequences.
+    # use it like rnn_cell, passing the state (h, c) along:
+    #   state = None
+    #   for x_t in sequence:
+    #       h, c = cell(x_t, state)
+    #       state = (h, c)
+    def __init__(self, input_size, hidden_size):
+        super().__init__()
+        bound = hidden_size ** -0.5
+        self.w_x = tensor([[random.uniform(-bound, bound) for _ in range(4 * hidden_size)] for _ in range(input_size)])
+        self.w_h = tensor([[random.uniform(-bound, bound) for _ in range(4 * hidden_size)] for _ in range(hidden_size)])
+        # the forget gate's bias starts at 1, so f starts near sigmoid(1) = 0.73 and the cell
+        # keeps most of what it holds until training says otherwise (Jozefowicz et al., 2015)
+        H = hidden_size
+        self.b = tensor([[0.0] * H + [1.0] * H + [0.0] * (2 * H)])
+
+    def __call__(self, x, state=None):
+        input_size, H = self.w_x.shape[0], self.w_h.shape[0]
+        if len(x.shape) != 2 or x.shape[1] != input_size:
+            raise ValueError(f"lstm_cell expects input shape (N, {input_size}), got {x.shape}")
+        N = x.shape[0]
+        if state is None:
+            # nothing read yet: start from zeros
+            zeros = tensor([0.0] * (N * H), shape=(N, H))
+            state = (zeros, zeros)
+        h, c = state
+        for name, t in (("hidden", h), ("cell", c)):
+            if t.shape != (N, H):
+                raise ValueError(f"lstm_cell expects {name} shape ({N}, {H}), got {t.shape}")
+
+        gates = x @ self.w_x + h @ self.w_h + self.b
+        i = gates[:, :H].sigmoid()
+        f = gates[:, H:2 * H].sigmoid()
+        g = gates[:, 2 * H:3 * H].tanh()
+        o = gates[:, 3 * H:].sigmoid()
+        c = f * c + i * g
+        h = o * c.tanh()
+        return h, c
+
+    def __repr__(self):
+        return f"LSTMCell({self.w_x.shape[0]}, {self.w_h.shape[0]})"
+
+
 class multi_head_attention(module):
     # runs num_heads attentions side by side, each on its own slice of dim // num_heads
     # features, so different heads can look for different things (one might follow the

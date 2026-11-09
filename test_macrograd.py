@@ -7,7 +7,7 @@ import tempfile
 import weakref
 
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
-from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
+from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
@@ -22,6 +22,16 @@ def raises(fn, error):
         fn()
     except error:
         return True
+    return False
+
+
+def raises_with(fn, error, text):
+    # like raises, but the message has to contain text, so an error from some op
+    # further in doesn't count
+    try:
+        fn()
+    except error as e:
+        return text in str(e)
     return False
 
 
@@ -1627,6 +1637,107 @@ def test_rnn_cell():
 
     assert raises(lambda: rnn_cell(3, 4)(rand_tensor(2, 2)), ValueError)
     assert raises(lambda: rnn_cell(3, 4)(rand_tensor(2, 3), rand_tensor(3, 4)), ValueError)
+
+
+def to_rows(t):
+    return [t.data[n * t.shape[1]:(n + 1) * t.shape[1]] for n in range(t.shape[0])]
+
+
+def ref_gate_inputs(cell, x_row, h_row):
+    # x_row @ w_x + h_row @ w_h for every column, before any bias
+    I, cols = cell.w_x.shape
+    H = cell.w_h.shape[0]
+    return [math.fsum([x_row[k] * cell.w_x.get_element(k, j) for k in range(I)]
+                      + [h_row[k] * cell.w_h.get_element(k, j) for k in range(H)]) for j in range(cols)]
+
+
+def ref_lstm_step(cell, x, h, c):
+    # one step by hand, on lists of rows
+    H = cell.w_h.shape[0]
+    h_out, c_out = [], []
+    for x_row, h_row, c_row in zip(x, h, c):
+        pre = [v + b for v, b in zip(ref_gate_inputs(cell, x_row, h_row), cell.b.data)]
+        i = [ref_sigmoid(v) for v in pre[:H]]
+        f = [ref_sigmoid(v) for v in pre[H:2 * H]]
+        g = [math.tanh(v) for v in pre[2 * H:3 * H]]
+        o = [ref_sigmoid(v) for v in pre[3 * H:]]
+        c_new = [f[j] * c_row[j] + i[j] * g[j] for j in range(H)]
+        c_out.append(c_new)
+        h_out.append([o[j] * math.tanh(c_new[j]) for j in range(H)])
+    return h_out, c_out
+
+
+def test_lstm_cell():
+    random.seed(42)
+    cell = lstm_cell(3, 4)
+    assert [name for name, _ in cell.named_parameters()] == ["w_x", "w_h", "b"]
+    assert cell.w_x.shape == (3, 16) and cell.w_h.shape == (4, 16) and cell.b.shape == (1, 16)
+    # gates in the order i, f, g, o, and only the forget gate's bias starts at 1
+    assert cell.b.data == [0.0] * 4 + [1.0] * 4 + [0.0] * 8
+    assert repr(cell) == "LSTMCell(3, 4)"
+    cell.b.data = [random.uniform(-1, 1) for _ in range(16)]
+
+    x, h, c = rand_tensor(2, 3), rand_tensor(2, 4), rand_tensor(2, 4)
+    h_new, c_new = cell(x, (h, c))
+    assert h_new.shape == c_new.shape == (2, 4)
+    ref_h, ref_c = ref_lstm_step(cell, to_rows(x), to_rows(h), to_rows(c))
+    for n in range(2):
+        for j in range(4):
+            assert close(h_new.get_element(n, j), ref_h[n][j])
+            assert close(c_new.get_element(n, j), ref_c[n][j])
+    zeros = tensor([0.0] * 8, shape=(2, 4))
+    h0, c0 = cell(x)
+    h1, c1 = cell(x, (zeros, zeros))
+    assert h0.data == h1.data and c0.data == c1.data
+
+    def run(cell, sequence, state=None):
+        for x_t in sequence:
+            state = cell(x_t, state)
+        return state
+
+    # backprop through time, 4 steps back: grads for the weights, every input and the
+    # starting state. the loss reads c as well as h, so both paths out of a step are checked
+    sequence = [rand_tensor(2, 3) for _ in range(4)]
+    y = rand_tensor(2, 4)
+    loss = lambda state: state[0].mse_loss(y) + (state[1] * state[1]).mean()
+    gradcheck(lambda *params: loss(run(cell, sequence)), *cell.parameters())
+    gradcheck(lambda *inputs: loss(run(cell, inputs)), *sequence)
+    gradcheck(lambda h, c: loss(run(cell, sequence, (h, c))), h, c)
+    assert any(g != 0.0 for g in sequence[0].grad)
+
+    # with the forget gate wide open and the input gate shut, c goes through every step
+    # unchanged, and so does its gradient: dc_t/dc_(t-1) = f = 1
+    cell.b.data = [-50.0] * 4 + [50.0] * 4 + [0.0] * 8
+    c_start = rand_tensor(2, 4)
+    _, c_end = run(cell, sequence, (rand_tensor(2, 4), c_start))
+    assert all(abs(a - b) < 1e-12 for a, b in zip(c_end.data, c_start.data))
+    c_end.sum().backward()
+    assert all(abs(g - 1.0) < 1e-12 for g in c_start.grad)
+
+    # the memory task from the rnn_cell test: read 6 random +-1 values, then say what the
+    # first one was
+    def make(n):
+        rows = [[random.choice([-1.0, 1.0]) for _ in range(6)] for _ in range(n)]
+        return [tensor([[r[t]] for r in rows]) for t in range(6)], [int(r[0] > 0) for r in rows]
+
+    random.seed(43)
+    cell, head = lstm_cell(1, 4), linear(4, 2)
+    opt = Adam(cell.parameters() + head.parameters(), lr=0.05)
+    for _ in range(60):
+        inputs, labels = make(32)
+        h, _ = run(cell, inputs)
+        loss = head(h).log_softmax().nll_loss(labels)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    inputs, labels = make(200)
+    h, _ = run(cell, inputs)
+    assert head(h).accuracy(labels) == 1.0
+
+    cell, x = lstm_cell(3, 4), rand_tensor(2, 3)
+    assert raises_with(lambda: cell(rand_tensor(2, 2)), ValueError, "input shape (N, 3)")
+    assert raises_with(lambda: cell(x, (rand_tensor(3, 4), rand_tensor(2, 4))), ValueError, "hidden shape (2, 4)")
+    assert raises_with(lambda: cell(x, (rand_tensor(2, 4), rand_tensor(2, 5))), ValueError, "cell shape (2, 4)")
 
 
 def ref_attention(q, k, v, causal):
