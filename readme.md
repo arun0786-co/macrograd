@@ -60,9 +60,10 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 
 - Arithmetic: `+`, `-`, `*`, `/`, `**` and `@`. `@` also works on batches when the leading dims match.
 - `+` and `*` broadcast like numpy. Shapes line up from the right and size-1 dims repeat, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it explicitly.
-- Reductions: `.sum`, `.mean`, `.var`, `.max` and `.argmax` take `axis` and `keepdim` and reduce everything by default. There's also `.std()`.
+- Reductions: `.sum`, `.mean`, `.var`, `.max`, `.argmax`, `.min` and `.argmin` take `axis` and `keepdim` and reduce everything by default. There's also `.std()`.
 - Shapes: `.reshape()` (one dim can be `-1`), `.transpose(dim0, dim1)` (the last two dims by default), `.flatten(start_dim)` and `concat(tensors, axis)`. Indexing takes ints, slices and lists of ints: `x[0]`, `x[:, 1:3]`, `x[[2, 0]]`.
 - Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (the tanh approximation), `silu` (`x * sigmoid(x)`, also called swish), and `softmax` and `log_softmax` over each row.
+- `.clamp(min, max)` limits every value to a range. Either bound can be `None`, so `.clamp(min=0)` is relu. Values that got cut off get no gradient.
 - `.layer_norm(eps)` moves each row to mean 0 and variance 1, as one node with a handwritten backward.
 - `.rms_norm(eps)` divides each row by its root mean square, `sqrt(mean(x^2) + eps)`. It's layer norm without subtracting the mean, as used in LLaMA.
 - `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images and zero-pads the edges. `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel.
