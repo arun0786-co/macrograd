@@ -781,6 +781,35 @@ class tensor:
         out._backward = _backward
         return out
     
+    def cumsum(self, axis):
+        # running total along one axis: out[k] = x[0] + x[1] + ... + x[k] at every position
+        # of the other axes. the shape stays the same, and the last value along the axis is
+        # the sum. x[j] is added into every out[k] with k >= j, so backward is a running
+        # total too, taken from the other end: x[j] gets out.grad[j] + out.grad[j+1] + ...
+        outer, size, inner, _ = self._reduce_layout(axis, keepdim=True)
+        out_data = [0.0] * len(self.data)
+        for o in range(outer):
+            for r in range(inner):
+                total = 0.0
+                for k in range(size):
+                    i = (o * size + k) * inner + r
+                    total += self.data[i]
+                    out_data[i] = total
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='cumsum')
+
+        def _backward():
+            for o in range(outer):
+                for r in range(inner):
+                    total = 0.0
+                    for k in reversed(range(size)):
+                        i = (o * size + k) * inner + r
+                        total += out.grad[i]
+                        self.grad[i] += total
+
+        out._backward = _backward
+        return out
+
     def mean(self, axis=None, keepdim=False):
         # sum divided by how many values went into each sum. built from sum and *, so
         # backward comes for free: each input gets out.grad / count
