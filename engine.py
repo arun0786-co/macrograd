@@ -1210,6 +1210,25 @@ def concat(tensors, axis=0):
     return out
 
 
+def stack(tensors, axis=0):
+    # joins same-shape tensors along a new axis: stacking n tensors of shape (3, 4) on
+    # axis 0 gives (n, 3, 4), and on axis -1 gives (3, 4, n). each tensor gets a size-1
+    # dim at that axis with reshape, then concat joins them along it, so forward and
+    # backward both come from those two ops
+    tensors = list(tensors)
+    if not tensors:
+        raise ValueError("stack needs at least one tensor")
+    shape = tensors[0].shape
+    for t in tensors:
+        if t.shape != shape:
+            raise ValueError(f"stack needs tensors of the same shape, got {shape} and {t.shape}")
+    n = len(shape) + 1  # dims in the output
+    if not -n <= axis < n:
+        raise IndexError(f"Axis {axis} out of range for stacking shape {shape}")
+    axis %= n
+    return concat([t.reshape(shape[:axis] + (1,) + shape[axis:]) for t in tensors], axis)
+
+
 def where(condition, a, b):
     # picks each value from a where the condition is true (nonzero) and from b elsewhere:
     #   out_i = a_i if condition_i else b_i
