@@ -6,7 +6,7 @@ import random
 import tempfile
 import weakref
 
-from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled
+from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, where
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
@@ -545,6 +545,59 @@ def test_clamp():
 
     assert raises(lambda: x.clamp(), ValueError)
     assert raises(lambda: x.clamp(1.0, 0.0), ValueError)
+
+
+def test_where():
+    cond = [[True, False, True], [False, False, True]]
+    a = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    b = tensor([[-1.0, -2.0, -3.0], [-4.0, -5.0, -6.0]])
+    out = where(cond, a, b)
+    assert out.shape == (2, 3) and out.data == [1.0, -2.0, 3.0, -4.0, -5.0, 6.0]
+    # a condition tensor counts nonzero as true
+    assert where(tensor([[1, 0, 2], [0, 0, -1]]), a, b).data == out.data
+
+    # each grad goes to the side that was picked
+    weights = tensor([[0.5, -1.0, 2.0], [3.0, -0.25, 1.5]])
+    (out * weights).sum().backward()
+    assert a.grad == [0.5, 0.0, 2.0, 0.0, 0.0, 1.5]
+    assert b.grad == [0.0, -1.0, 0.0, 3.0, -0.25, 0.0]
+
+    # broadcasting: a (2, 3) condition, a (3,) row and a number
+    row = tensor([10.0, 20.0, 30.0])
+    out = where(cond, row, 0.5)
+    assert out.data == [10.0, 0.5, 30.0, 0.5, 0.5, 30.0]
+    (out * weights).sum().backward()
+    assert row.grad == [0.5, 0.0, 2.0 + 1.5]
+    # a (2, 1) condition picks whole rows, and b alone can set the shape too
+    assert where([[True], [False]], a, b).data == [1.0, 2.0, 3.0, -4.0, -5.0, -6.0]
+    assert where([True, False, True], 0.0, b).data == [0.0, -2.0, 0.0, 0.0, -5.0, 0.0]
+
+    random.seed(39)
+    x, y = rand_tensor(2, 3), rand_tensor(1, 3)
+    gradcheck(lambda p, q: (where(cond, p * q, p.tanh()) * weights).sum(), x, y)
+    # p is used twice, so its grads from where and from * have to add up
+    z = rand_tensor(2, 3)
+    gradcheck(lambda p, q: (where(cond, p, q) * p).sum(), x, z)
+
+    # the condition only chooses: it gets no grad and isn't in the graph
+    c = tensor([1.0, 0.0])
+    picked = where(c, tensor([1.0, 2.0]), tensor([3.0, 4.0]))
+    assert c not in picked._prev
+    picked.sum().backward()
+    assert c.grad == [0.0, 0.0]
+
+    # masking: -inf scores get probability 0, and no grad and no nan flow to them
+    scores = tensor([[0.3, 1.2, -0.7, 2.0]])
+    mask = [[True, True, False, True]]
+    probs = where(mask, scores, float("-inf")).softmax()
+    kept = [math.exp(v) for v in [0.3, 1.2, 2.0]]
+    assert all(close(p, e) for p, e in zip([probs.data[0], probs.data[1], probs.data[3]], [k / sum(kept) for k in kept]))
+    assert probs.data[2] == 0.0
+    (probs * tensor([[1.0, -2.0, 5.0, 0.5]])).sum().backward()
+    assert scores.grad[2] == 0.0 and all(g == g for g in scores.grad)
+
+    assert raises(lambda: where([True, False], a, b), ValueError)
+    assert raises(lambda: where(cond, a, tensor([1.0, 2.0])), ValueError)
 
 
 def test_getitem():

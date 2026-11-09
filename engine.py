@@ -1210,6 +1210,36 @@ def concat(tensors, axis=0):
     return out
 
 
+def where(condition, a, b):
+    # picks each value from a where the condition is true (nonzero) and from b elsewhere:
+    #   out_i = a_i if condition_i else b_i
+    # all three broadcast against each other like +, and a or b can be a plain number,
+    # like where(mask, scores, float("-inf")). each output comes from exactly one of a and
+    # b, so backward sends its grad there and the other one gets nothing for that spot.
+    # the condition only chooses, so it gets no grad and isn't part of the graph
+    if not isinstance(condition, tensor):
+        condition = tensor(condition)
+    a = a if isinstance(a, tensor) else tensor(float(a))
+    b = b if isinstance(b, tensor) else tensor(float(b))
+    shape = tensor._broadcast_shape(tensor._broadcast_shape(condition.shape, a.shape), b.shape)
+    with no_grad():
+        pick = condition.expand(shape).data
+    a, b = a.expand(shape), b.expand(shape)
+
+    out = tensor([x if c else y for c, x, y in zip(pick, a.data, b.data)], shape=shape,
+                 children=(a, b), op='where')
+
+    def _backward():
+        for i, c in enumerate(pick):
+            if c:
+                a.grad[i] += out.grad[i]
+            else:
+                b.grad[i] += out.grad[i]
+
+    out._backward = _backward
+    return out
+
+
 class no_grad:
     # runs ops without recording the graph:
     #   with no_grad():
