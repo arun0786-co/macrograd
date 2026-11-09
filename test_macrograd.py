@@ -7,7 +7,7 @@ import tempfile
 import weakref
 
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled
-from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rnn_cell, sequential, transformer_block
+from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
@@ -969,6 +969,64 @@ def test_layer_norm():
     gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
 
     assert raises(lambda: norm(rand_tensor(3, 4)), ValueError)
+
+
+def test_rms_norm():
+    random.seed(37)
+    x = rand_tensor(3, 5) * 4.0 + 1.0
+    out = x.rms_norm()
+    for r in range(3):
+        row = x.data[5 * r:5 * r + 5]
+        ms = math.fsum(v * v for v in row) / 5
+        for j in range(5):
+            assert close(out.data[5 * r + j], row[j] / math.sqrt(ms + 1e-5))
+        # the squares average to ms / (ms + eps), just under 1
+        assert close(math.fsum(v * v for v in out.data[5 * r:5 * r + 5]) / 5, ms / (ms + 1e-5))
+
+    # unlike layer_norm it doesn't subtract the mean: a constant row stays (almost) 1s
+    # instead of becoming 0s, and an all-zero row stays 0 thanks to eps
+    assert all(close(v, 2.0 / math.sqrt(4.0 + 1e-5)) for v in tensor([[2.0, 2.0, 2.0]]).rms_norm().data)
+    assert tensor([[0.0, 0.0, 0.0]]).rms_norm().data == [0.0, 0.0, 0.0]
+    # scaling a row by c only changes the output through eps: it's the same as using eps / c^2
+    big, small_eps = (x * 1000.0).rms_norm(), x.rms_norm(eps=1e-5 / 1000.0 ** 2)
+    assert all(close(a, b) for a, b in zip(big.data, small_eps.data))
+    assert all(abs(a - b) < 1e-5 for a, b in zip(big.data, out.data))
+
+    # weight the outputs so the grads aren't hidden by symmetry
+    w = rand_tensor(3, 5)
+    gradcheck(lambda a: (a.rms_norm() * w).sum(), x)
+    cube = tensor([[[random.uniform(-2, 2) for _ in range(4)] for _ in range(3)] for _ in range(2)])
+    target = tensor([[[random.uniform(-1, 1) for _ in range(4)] for _ in range(3)] for _ in range(2)])
+    gradcheck(lambda a: a.rms_norm(eps=0.1).mse_loss(target), cube)
+    gradcheck(lambda a: (a.rms_norm() * a).sum(), x)
+
+    # since scaling a row doesn't change the output, the grad of each row points across
+    # the row, not along it: sum(x * dL/dx) is about 0 for every row
+    x.grad = [0.0] * 15
+    (x.rms_norm() * w).sum().backward()
+    for r in range(3):
+        assert abs(math.fsum(a * b for a, b in zip(x.data[5 * r:5 * r + 5], x.grad[5 * r:5 * r + 5]))) < 1e-5
+
+    # the layer starts as a plain normalization, then gamma gets trained
+    norm = rms_norm(5)
+    assert [name for name, _ in norm.named_parameters()] == ["gamma"]
+    assert norm(x).data == out.data
+    norm.gamma.data = [random.uniform(0.5, 2) for _ in range(5)]
+    y = rand_tensor(3, 5)
+    for r in range(3):
+        row = x.data[5 * r:5 * r + 5]
+        rms = math.sqrt(math.fsum(v * v for v in row) / 5 + 1e-5)
+        for j in range(5):
+            assert close(norm(x).data[5 * r + j], row[j] / rms * norm.gamma.data[j])
+    gradcheck(lambda a, gamma: norm(a).mse_loss(y), x, norm.gamma)
+
+    model = sequential(linear(5, 8), rms_norm(8), lambda h: h.silu(), linear(8, 5))
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+    assert raises(lambda: norm(rand_tensor(3, 4)), ValueError)
+    assert repr(norm) == "RMSNorm(5, eps=1e-05)"
+    loose = rms_norm(3, eps=0.5)
+    assert all(close(v, 2.0 / math.sqrt(4.0 + 0.5)) for v in loose(tensor([[2.0, 2.0, 2.0]])).data)
 
 
 def test_batch_norm():

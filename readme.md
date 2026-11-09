@@ -64,6 +64,7 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 - Shapes: `.reshape()` (one dim can be `-1`), `.transpose(dim0, dim1)` (the last two dims by default), `.flatten(start_dim)` and `concat(tensors, axis)`. Indexing takes ints, slices and lists of ints: `x[0]`, `x[:, 1:3]`, `x[[2, 0]]`.
 - Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (the tanh approximation), `silu` (`x * sigmoid(x)`, also called swish), and `softmax` and `log_softmax` over each row.
 - `.layer_norm(eps)` moves each row to mean 0 and variance 1, as one node with a handwritten backward.
+- `.rms_norm(eps)` divides each row by its root mean square, `sqrt(mean(x^2) + eps)`. It's layer norm without subtracting the mean, as used in LLaMA.
 - `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images and zero-pads the edges. `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel.
 - Losses: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, one node in the graph), `nll_loss(labels)` for integer labels after `log_softmax`, and `binary_cross_entropy_with_logits` for yes/no outputs, with the sigmoid built in.
 - `accuracy(labels)` is the fraction of rows whose highest score is the right class.
@@ -79,6 +80,7 @@ Layers subclass `module`. `.parameters()` finds every tensor a module stores, in
 - `sequential(*layers)` runs layers in order. A layer can also be a plain function like `lambda x: x.relu()`.
 - `dropout(p)` only drops values in training mode.
 - `layer_norm(dim)` normalizes each example's features, then scales and shifts them with learned `gamma` and `beta`.
+- `rms_norm(dim)` does the same with `.rms_norm()` and a learned `gamma`. It has no `beta`, since it never moves the mean.
 - `batch_norm(dim)` normalizes each feature over the batch while training and keeps running averages of the mean and variance to use in `.eval()` mode. The running stats are buffers (see `buffer_names` and `.named_buffers()`), so they're saved with the weights, but the optimizer never changes them.
 - `conv2d(in_channels, out_channels, kernel_size, stride, padding)` has square filters and one bias per filter. `max_pool2d(kernel_size)` and `flatten()` wrap the tensor ops, and `flatten` keeps the batch dim, so a small CNN looks like `sequential(conv2d(1, 8, 3, padding=1), lambda x: x.relu(), max_pool2d(2), flatten(), linear(...))`.
 - `embedding(num_embeddings, dim)` is a learned table with one vector per id. Ids of any shape come back as vectors of shape `ids.shape + (dim,)`.
