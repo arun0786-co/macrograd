@@ -478,6 +478,75 @@ def test_max_and_argmax():
         gradcheck(lambda t: (t.max(axis=axis) * weights).sum(), x)
 
 
+def test_min_and_argmin():
+    a = tensor([[1.0, 7.0, 3.0], [-2.0, 9.0, -2.0]])
+    assert a.min().data == [-2.0] and a.min().shape == ()
+    assert a.argmin().data == [3]
+    assert a.min(axis=1).data == [1.0, -2.0] and a.argmin(axis=1).data == [0, 0]
+    assert a.min(axis=0).data == [-2.0, 7.0, -2.0] and a.argmin(axis=0).data == [1, 0, 1]
+    assert a.min(axis=-1, keepdim=True).shape == (2, 1)
+    assert a.argmin(axis=0, keepdim=True).shape == (1, 3)
+
+    random.seed(38)
+    x = tensor([random.uniform(-1, 1) for _ in range(24)], shape=(2, 3, 4))
+    for axis in [0, 1, 2]:
+        m, idx = x.min(axis=axis), x.argmin(axis=axis)
+        for i in range(2):
+            for j in range(3):
+                for k in range(4):
+                    out_index = [i, j, k]
+                    del out_index[axis]
+                    column = [x.get_element(*(out_index[:axis] + [t] + out_index[axis:]))
+                              for t in range(x.shape[axis])]
+                    assert m.get_element(*out_index) == min(column)
+                    assert idx.get_element(*out_index) == column.index(min(column))
+
+    # ties: the grad goes only to the first min, the one argmin points at
+    t = tensor([5.0, 2.0, 2.0])
+    t.min().backward()
+    assert t.grad == [0.0, 1.0, 0.0]
+
+    assert raises(lambda: a.min(axis=2), IndexError)
+    assert raises(lambda: tensor([], shape=(0,)).min(), ValueError)
+
+    for axis in [None, 0, 1, 2]:
+        out = x.min(axis=axis)
+        weights = tensor([0.5 * v - 2.0 for v in range(len(out.data))], shape=out.shape)
+        gradcheck(lambda t: (t.min(axis=axis) * weights).sum(), x)
+
+
+def test_clamp():
+    points = [-3.0, -1.0, -0.5, 0.0, 0.25, 0.5, 1.0, 2.0, 7.0]
+    x = tensor(points)
+    for lo, hi in [(-0.5, 1.0), (0.0, None), (None, 0.5), (2.0, 2.0)]:
+        out = x.clamp(min=lo, max=hi)
+        expected = [min(max(v, lo if lo is not None else -math.inf), hi if hi is not None else math.inf) for v in points]
+        assert out.data == expected, (lo, hi)
+
+        # slope 1 where the value is inside the range, bounds included, and 0 where it was cut off
+        weights = [0.5 * k - 1.0 for k in range(len(points))]
+        x.grad = [0.0] * len(points)
+        (out * tensor(weights)).sum().backward()
+        for v, w, g in zip(points, weights, x.grad):
+            inside = (lo is None or v >= lo) and (hi is None or v <= hi)
+            assert g == (w if inside else 0.0), (lo, hi, v)
+
+    # clamp(min=0) is relu, and it can stand in for relu6, min(max(x, 0), 6)
+    assert x.clamp(min=0.0).data == x.relu().data
+    assert x.clamp(0.0, 6.0).data == [0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 1.0, 2.0, 6.0]
+    assert x.clamp(max=1).data == [-3.0, -1.0, -0.5, 0.0, 0.25, 0.5, 1.0, 1, 1]
+
+    # finite differences need room on both sides, so keep the points away from the bounds
+    random.seed(39)
+    a = tensor([[random.uniform(-2, 2) for _ in range(5)] for _ in range(3)])
+    lo, hi = -0.7, 0.9
+    assert all(abs(v - lo) > 1e-3 and abs(v - hi) > 1e-3 for v in a.data)
+    gradcheck(lambda t: (t.clamp(lo, hi) * t).sum(), a)
+
+    assert raises(lambda: x.clamp(), ValueError)
+    assert raises(lambda: x.clamp(1.0, 0.0), ValueError)
+
+
 def test_getitem():
     a = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
     assert a[1].data == [4.0, 5.0, 6.0] and a[1].shape == (3,)

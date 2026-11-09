@@ -857,6 +857,43 @@ class tensor:
         _, indices, shape = self._max_positions(axis, keepdim)
         return tensor(indices, shape=shape)
 
+    def min(self, axis=None, keepdim=False):
+        # the smallest value is the largest one after flipping signs: min(x) = -max(-x).
+        # so this reuses max's forward and backward, the grad goes only to the smallest
+        # input, and on ties the first one wins
+        return -(-self).max(axis, keepdim)
+
+    def argmin(self, axis=None, keepdim=False):
+        return (-self).argmax(axis, keepdim)
+
+    def clamp(self, min=None, max=None):
+        # limits every value to [min, max]. either bound can be None for no limit, so
+        # clamp(min=0) is relu. inside the range the output is x, slope 1; where a bound
+        # takes over the output is that constant, slope 0. a value exactly on a bound
+        # counts as inside and keeps its grad, as in pytorch
+        lo, hi = min, max
+        if lo is None and hi is None:
+            raise ValueError("clamp needs a min, a max or both")
+        if lo is not None and hi is not None and lo > hi:
+            raise ValueError(f"clamp min {lo} is bigger than max {hi}")
+        out_data = [0.0] * len(self.data)
+        for i, x in enumerate(self.data):
+            if lo is not None and x < lo:
+                x = lo
+            if hi is not None and x > hi:
+                x = hi
+            out_data[i] = x
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='clamp')
+
+        def _backward():
+            for i, x in enumerate(self.data):
+                if (lo is None or x >= lo) and (hi is None or x <= hi):
+                    self.grad[i] += out.grad[i]
+
+        out._backward = _backward
+        return out
+
     def softmax(self):
         # over the last dimension, so each row of a (B, C) batch sums to 1
         C = self.shape[-1] if self.shape else 1
