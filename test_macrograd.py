@@ -6,7 +6,7 @@ import random
 import tempfile
 import weakref
 
-from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, where
+from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
@@ -666,6 +666,62 @@ def test_concat():
 
     weights = tensor([0.3 * v - 2.0 for v in range(40)], shape=(2, 5, 4))
     gradcheck(lambda p, q: (concat([p, q], axis=1) * weights).sum(), x, y)
+
+
+def test_stack():
+    a = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    b = tensor([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]])
+    assert stack([a, b]).shape == (2, 2, 3)
+    assert stack([a, b]).data == a.data + b.data
+    assert stack([a, b], axis=1).shape == (2, 2, 3)
+    assert stack([a, b], axis=1).data == [1.0, 2.0, 3.0, 7.0, 8.0, 9.0, 4.0, 5.0, 6.0, 10.0, 11.0, 12.0]
+    assert stack([a, b], axis=-1).shape == (2, 3, 2)
+    assert stack([a, b], axis=2).data == [1.0, 7.0, 2.0, 8.0, 3.0, 9.0, 4.0, 10.0, 5.0, 11.0, 6.0, 12.0]
+
+    # every axis, checked value by value: out[..., n, ...] is the n-th tensor
+    random.seed(40)
+    ts = [rand_tensor(2, 3) for _ in range(4)]
+    for axis in [0, 1, 2, -1, -2, -3]:
+        out = stack(ts, axis)
+        k = axis % 3
+        assert out.shape == (2, 3)[:k] + (4,) + (2, 3)[k:]
+        for n, t in enumerate(ts):
+            for i in range(2):
+                for j in range(3):
+                    index = [i, j]
+                    index.insert(k, n)
+                    assert out.get_element(*index) == t.get_element(i, j)
+
+    # numbers stack into a vector, and indexing undoes stacking
+    assert stack([tensor(1.5), tensor(-2.0), tensor(0.0)]).data == [1.5, -2.0, 0.0]
+    assert stack([tensor(1.5), tensor(-2.0)]).shape == (2,)
+    assert stack([a, b])[1].data == b.data and stack([a, b], axis=1)[:, 0].data == a.data
+
+    # hidden states from each step of an rnn, stacked along time: (batch, time, hidden)
+    cell = rnn_cell(3, 4)
+    xs, h, hs = [rand_tensor(2, 3) for _ in range(5)], None, []
+    for x in xs:
+        h = cell(x, h)
+        hs.append(h)
+    assert stack(hs, axis=1).shape == (2, 5, 4)
+    assert stack(hs, axis=1)[:, 4].data == h.data
+
+    weights = tensor([0.3 * v - 2.0 for v in range(24)], shape=(2, 4, 3))
+    gradcheck(lambda *t: (stack(t, axis=1) * weights).sum(), *ts)
+    # the same tensor twice gets both grads
+    c = tensor([1.0, 2.0])
+    (stack([c, c]) * tensor([[1.0, 2.0], [3.0, 4.0]])).sum().backward()
+    assert c.grad == [4.0, 6.0]
+
+    # concat would refuse these too, but the message should say what stack needs
+    try:
+        stack([a, tensor([1.0, 2.0, 3.0])])
+        assert False, "stack accepted different shapes"
+    except ValueError as e:
+        assert "same shape" in str(e)
+    assert raises(lambda: stack([]), ValueError)
+    assert raises(lambda: stack([a, b], axis=3), IndexError)
+    assert raises(lambda: stack([a, b], axis=-4), IndexError)
 
 
 def test_log_softmax():
