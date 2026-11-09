@@ -7,7 +7,7 @@ import tempfile
 import weakref
 
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
-from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
+from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
@@ -1738,6 +1738,89 @@ def test_lstm_cell():
     assert raises_with(lambda: cell(rand_tensor(2, 2)), ValueError, "input shape (N, 3)")
     assert raises_with(lambda: cell(x, (rand_tensor(3, 4), rand_tensor(2, 4))), ValueError, "hidden shape (2, 4)")
     assert raises_with(lambda: cell(x, (rand_tensor(2, 4), rand_tensor(2, 5))), ValueError, "cell shape (2, 4)")
+
+
+def ref_row_matmul(row, w):
+    return [math.fsum(row[k] * w.get_element(k, j) for k in range(len(row))) for j in range(w.shape[1])]
+
+
+def ref_gru_step(cell, x, h):
+    # one step by hand, on lists of rows
+    H = cell.w_h.shape[0]
+    out = []
+    for x_row, h_row in zip(x, h):
+        gx = [v + b for v, b in zip(ref_row_matmul(x_row, cell.w_x), cell.b_x.data)]
+        gh = [v + b for v, b in zip(ref_row_matmul(h_row, cell.w_h), cell.b_h.data)]
+        r = [ref_sigmoid(gx[j] + gh[j]) for j in range(H)]
+        z = [ref_sigmoid(gx[H + j] + gh[H + j]) for j in range(H)]
+        n = [math.tanh(gx[2 * H + j] + r[j] * gh[2 * H + j]) for j in range(H)]
+        out.append([(1 - z[j]) * n[j] + z[j] * h_row[j] for j in range(H)])
+    return out
+
+
+def test_gru_cell():
+    random.seed(43)
+    cell = gru_cell(3, 4)
+    assert [name for name, _ in cell.named_parameters()] == ["w_x", "w_h", "b_x", "b_h"]
+    assert cell.w_x.shape == (3, 12) and cell.w_h.shape == (4, 12)
+    assert cell.b_x.data == cell.b_h.data == [0.0] * 12 and cell.b_x.shape == cell.b_h.shape == (1, 12)
+    assert repr(cell) == "GRUCell(3, 4)"
+    # different biases on the two sides, so a mix-up between them shows up in n
+    cell.b_x.data = [random.uniform(-1, 1) for _ in range(12)]
+    cell.b_h.data = [random.uniform(-1, 1) for _ in range(12)]
+
+    x, h = rand_tensor(2, 3), rand_tensor(2, 4)
+    out = cell(x, h)
+    assert out.shape == (2, 4)
+    ref = ref_gru_step(cell, to_rows(x), to_rows(h))
+    for n in range(2):
+        for j in range(4):
+            assert close(out.get_element(n, j), ref[n][j])
+    assert cell(x).data == cell(x, tensor([0.0] * 8, shape=(2, 4))).data
+
+    def run(cell, sequence, h=None):
+        for x_t in sequence:
+            h = cell(x_t, h)
+        return h
+
+    # backprop through time, 4 steps back: grads for the weights, every input and the starting h
+    sequence = [rand_tensor(2, 3) for _ in range(4)]
+    y = rand_tensor(2, 4)
+    gradcheck(lambda *params: run(cell, sequence).mse_loss(y), *cell.parameters())
+    gradcheck(lambda *inputs: run(cell, inputs).mse_loss(y), *sequence)
+    gradcheck(lambda h: run(cell, sequence, h).mse_loss(y), h)
+    assert any(g != 0.0 for g in sequence[0].grad)
+
+    # with the update gate shut (z = 1), h goes through every step unchanged, and so does
+    # its gradient: dh_t/dh_(t-1) = z = 1
+    cell.b_x.data = [0.0] * 4 + [50.0] * 4 + [0.0] * 4
+    h_start = rand_tensor(2, 4)
+    h_end = run(cell, sequence, h_start)
+    assert all(abs(a - b) < 1e-12 for a, b in zip(h_end.data, h_start.data))
+    h_end.sum().backward()
+    assert all(abs(g - 1.0) < 1e-12 for g in h_start.grad)
+
+    # the memory task from the rnn_cell test: read 6 random +-1 values, then say what the
+    # first one was
+    def make(n):
+        rows = [[random.choice([-1.0, 1.0]) for _ in range(6)] for _ in range(n)]
+        return [tensor([[r[t]] for r in rows]) for t in range(6)], [int(r[0] > 0) for r in rows]
+
+    random.seed(44)
+    cell, head = gru_cell(1, 4), linear(4, 2)
+    opt = Adam(cell.parameters() + head.parameters(), lr=0.05)
+    for _ in range(60):
+        inputs, labels = make(32)
+        loss = head(run(cell, inputs)).log_softmax().nll_loss(labels)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    inputs, labels = make(200)
+    assert head(run(cell, inputs)).accuracy(labels) == 1.0
+
+    cell, x = gru_cell(3, 4), rand_tensor(2, 3)
+    assert raises_with(lambda: cell(rand_tensor(2, 2)), ValueError, "input shape (N, 3)")
+    assert raises_with(lambda: cell(x, rand_tensor(3, 4)), ValueError, "hidden shape (2, 4)")
 
 
 def ref_attention(q, k, v, causal):
