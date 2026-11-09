@@ -552,6 +552,24 @@ class layer_norm(module):
         return f"LayerNorm({self.gamma.shape[0]}, eps={self.eps})"
 
 
+class rms_norm(module):
+    # divides each example's features (the last dim) by their root mean square, then
+    # scales by a learned gamma, one per feature, starting at 1. there's no beta: the
+    # norm doesn't move the mean to 0, so there's nothing to shift back
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.gamma = tensor([1.0] * dim)
+
+    def __call__(self, x):
+        if not x.shape or x.shape[-1] != self.gamma.shape[0]:
+            raise ValueError(f"rms_norm expects a last dim of {self.gamma.shape[0]}, got shape {x.shape}")
+        return x.rms_norm(self.eps) * self.gamma
+
+    def __repr__(self):
+        return f"RMSNorm({self.gamma.shape[0]}, eps={self.eps})"
+
+
 class batch_norm(module):
     # normalizes each feature over the batch: every column of an (N, C) input gets the
     # batch mean of that column subtracted and is divided by the batch std, then scaled by

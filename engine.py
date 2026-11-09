@@ -946,6 +946,39 @@ class tensor:
         out._backward = _backward
         return out
 
+    def rms_norm(self, eps=1e-5):
+        # like layer_norm without subtracting the mean: divides each row (the last dim) by
+        # its root mean square, so the squares of the outputs average to about 1:
+        #   x_hat = x / sqrt(mean(x^2) + eps)
+        # it skips a pass over the row, and LLaMA and other newer language models use it
+        # in place of layer_norm. eps keeps an all-zero row at 0 instead of 0 / 0.
+        # with r = 1 / sqrt(mean(x^2) + eps), moving x_i changes x_hat_i directly and
+        # rescales the whole row through r, which gives
+        #   dL/dx_i = r * (g_i - x_hat_i * mean(g * x_hat))
+        # where g = dL/dx_hat. it's layer_norm's formula without the mean(g) term
+        C = self.shape[-1] if self.shape else 1
+        out_data = [0.0] * len(self.data)
+        inv_rms = []
+        for start in range(0, len(self.data), C):
+            row = self.data[start:start + C]
+            r = (sum(v * v for v in row) / C + eps) ** -0.5
+            inv_rms.append(r)
+            for j in range(C):
+                out_data[start + j] = row[j] * r
+
+        out = tensor(out_data, shape=self.shape, children=(self,), op='rms_norm')
+
+        def _backward():
+            for n, start in enumerate(range(0, len(self.data), C)):
+                g = out.grad[start:start + C]
+                x_hat = out.data[start:start + C]
+                mean_g_x_hat = sum(a * b for a, b in zip(g, x_hat)) / C
+                for j in range(C):
+                    self.grad[start + j] += (g[j] - x_hat[j] * mean_g_x_hat) * inv_rms[n]
+
+        out._backward = _backward
+        return out
+
     def mse_loss(self, target):
         if self.shape != target.shape:
             raise ValueError(f"Shape mismatch in mse_loss: {self.shape} vs {target.shape}")
