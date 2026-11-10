@@ -18,6 +18,7 @@ python3 train.py            # tiny MLP, then draws its graph
 python3 train_iris.py       # MLP on iris
 python3 train_digits.py     # CNN on handwritten digits
 python3 train_gpt.py        # tiny GPT on Shakespeare
+python3 train_lstm.py       # LSTM on the same text, to compare
 ```
 
 The tests compare forward values with Python's `math` module and check gradients against finite differences. To check the backward pass of your own op, give `gradcheck` a function that returns one number:
@@ -49,6 +50,33 @@ And speme, ank hothe the fou.
 ```
 
 It has the layout of a play, with speaker names in capitals, colons and short lines, and some real words like "thy", "hand" and "that", but most of the words are made up.
+
+`train_lstm.py` trains an LSTM on the same text, set up like the GPT: the same 16-character windows in the same order, the same held-out windows, optimizer, lr schedule and number of steps, and nearly the same size. It has 32 numbers per character, an `lstm_cell` with a hidden size of 42 and a linear layer, 17,475 parameters in all. 1500 steps take about 12 minutes.
+
+| | GPT | LSTM |
+|---|---|---|
+| Parameters | 17,505 | 17,475 |
+| Held-out loss after 500 steps | 2.38 | 2.23 |
+| Held-out loss after 1500 steps | 2.18 (2.19 with another seed) | 2.12 (2.10 with another seed) |
+| Writing 300 characters | 12.6 s | 0.6 s |
+
+The LSTM is ahead the whole way. It writes text about 20 times faster because it reads each new character with one cell step and keeps the rest in its state, while the GPT runs its whole 16-character window through again for every character.
+
+The GPT can't see further back than 16 characters, but the LSTM's state carries on for as long as you feed it. It was only trained on 16 characters at a time from a zero state, and a longer run still helps: if it first reads the 48 characters before each held-out window, it scores 2.06 on those windows, against 2.11 from a zero state.
+
+This is a small setting, with 16 characters of context and about 17,500 parameters. Transformers took over from LSTMs at much bigger sizes and longer contexts, and on GPUs, where attention handles all the positions of a window in parallel and an LSTM has to go one step at a time.
+
+The LSTM's sample has long lines and no speaker names:
+
+```text
+ROMEO:
+ney the good he your:
+Could is I the and head maes, we ton to, fore doter that to the are of the, shany upe ond my of with and mum a chest,
+Fortmayt sher is afer the the and sting theres braip;
+And cust, as we to thishat manou wast haves and ther'dter the I hest craints werbould thy the suce him.
+```
+
+The run with the other seed did write names and short lines, so one 300-character sample doesn't separate the two models. The held-out loss does.
 
 The datasets download into `datasets/` on the first run, and the saved weights go in `checkpoints/`.
 
