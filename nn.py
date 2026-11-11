@@ -497,6 +497,51 @@ class lstm_cell(module):
         return f"LSTMCell({self.w_x.shape[0]}, {self.w_h.shape[0]})"
 
 
+class gru_cell(module):
+    # one step of a gated recurrent unit (Cho et al., 2014). it has gates like lstm_cell
+    # but no separate cell state, only h, and three sets of columns instead of four:
+    #   r = sigmoid(x_t @ w_x[r] + b_x[r] + h_(t-1) @ w_h[r] + b_h[r])      reset gate
+    #   z = sigmoid(x_t @ w_x[z] + b_x[z] + h_(t-1) @ w_h[z] + b_h[z])      update gate
+    #   n = tanh(x_t @ w_x[n] + b_x[n] + r * (h_(t-1) @ w_h[n] + b_h[n]))   candidate
+    #   h_t = (1 - z) * n + z * h_(t-1)
+    # z decides, feature by feature, whether to keep the old h or take the candidate n.
+    # where z is near 1, h passes through nearly unchanged and so does its gradient, like
+    # the lstm's cell state with f near 1. r decides how much of the old h goes into n.
+    # this is pytorch's version, where r multiplies h_(t-1) @ w_h[n] after the matmul. the
+    # paper applies it before, (r * h_(t-1)) @ w_h[n]. with r on the outside, the h side
+    # needs its own bias inside the brackets, so there are two biases. for r and z only
+    # b_x + b_h matters. used like rnn_cell: h = cell(x_t, h), starting from h = None
+    def __init__(self, input_size, hidden_size):
+        super().__init__()
+        bound = hidden_size ** -0.5
+        H = hidden_size
+        self.w_x = tensor([[random.uniform(-bound, bound) for _ in range(3 * H)] for _ in range(input_size)])
+        self.w_h = tensor([[random.uniform(-bound, bound) for _ in range(3 * H)] for _ in range(H)])
+        self.b_x = tensor([[0.0] * (3 * H)])
+        self.b_h = tensor([[0.0] * (3 * H)])
+
+    def __call__(self, x, h=None):
+        input_size, H = self.w_x.shape[0], self.w_h.shape[0]
+        if len(x.shape) != 2 or x.shape[1] != input_size:
+            raise ValueError(f"gru_cell expects input shape (N, {input_size}), got {x.shape}")
+        N = x.shape[0]
+        if h is None:
+            # nothing read yet: start from zeros
+            h = tensor([0.0] * (N * H), shape=(N, H))
+        if h.shape != (N, H):
+            raise ValueError(f"gru_cell expects hidden shape ({N}, {H}), got {h.shape}")
+
+        gx = x @ self.w_x + self.b_x
+        gh = h @ self.w_h + self.b_h
+        r = (gx[:, :H] + gh[:, :H]).sigmoid()
+        z = (gx[:, H:2 * H] + gh[:, H:2 * H]).sigmoid()
+        n = (gx[:, 2 * H:] + r * gh[:, 2 * H:]).tanh()
+        return (1.0 - z) * n + z * h
+
+    def __repr__(self):
+        return f"GRUCell({self.w_x.shape[0]}, {self.w_h.shape[0]})"
+
+
 class multi_head_attention(module):
     # runs num_heads attentions side by side, each on its own slice of dim // num_heads
     # features, so different heads can look for different things (one might follow the
