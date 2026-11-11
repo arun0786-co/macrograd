@@ -128,7 +128,9 @@ Layers subclass `module`. `.parameters()` finds every tensor a module stores, in
 ### optim.py
 
 - `SGD` with optional `momentum` and `weight_decay`.
-- `Adam`, which keeps a momentum and a velocity for each parameter.
+- `Adagrad` gives each weight its own step size: it divides the step by the square root of the sum of all that weight's squared gradients so far. Weights with big gradients take small steps, and the steps keep shrinking as training goes on.
+- `RMSprop` divides by a running average of recent squared gradients instead, so the steps stay about `lr` and don't shrink forever. With no correction for the average starting at 0, the first step is 10 times `lr` with the default `alpha=0.99`.
+- `Adam`, which keeps a momentum and a velocity for each parameter. It's RMSprop plus momentum and that correction.
 - `AdamW` is Adam with decoupled weight decay. It shrinks the weights directly instead of adding the decay to the gradient.
 - `clip_grad_norm(parameters, max_norm)` scales all the gradients down together when their combined length is over `max_norm`. Call it between `backward()` and `step()`.
 - `StepLR(optimizer, step_size, gamma)` multiplies the lr by `gamma` every `step_size` epochs. `CosineAnnealingLR(optimizer, T_max, eta_min)` lowers it from the starting lr to `eta_min` along a half cosine over `T_max` epochs. Call the schedule's `.step()` once per epoch, after `optimizer.step()`.
