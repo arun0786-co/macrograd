@@ -61,6 +61,7 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 - Arithmetic: `+`, `-`, `*`, `/`, `**` and `@`. `@` also works on batches when the leading dims match.
 - `+` and `*` broadcast like numpy. Shapes line up from the right and size-1 dims repeat, so `(3, 1) + (4,)` gives `(3, 4)`. `.expand(shape)` does it explicitly.
 - Reductions: `.sum`, `.mean`, `.var`, `.max`, `.argmax`, `.min` and `.argmin` take `axis` and `keepdim` and reduce everything by default. There's also `.std()`.
+- `.cumsum(axis)` keeps a running total along an axis, so `[1, 2, 3]` becomes `[1, 3, 6]`. The shape stays the same, and the last value along the axis is the sum.
 - Shapes: `.reshape()` (one dim can be `-1`), `.transpose(dim0, dim1)` (the last two dims by default), `.flatten(start_dim)`, `concat(tensors, axis)` and `stack(tensors, axis)`, which joins same-shape tensors along a new axis. Indexing takes ints, slices and lists of ints: `x[0]`, `x[:, 1:3]`, `x[[2, 0]]`.
 - Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (the tanh approximation), `silu` (`x * sigmoid(x)`, also called swish), and `softmax` and `log_softmax` over each row.
 - `.clamp(min, max)` limits every value to a range. Either bound can be `None`, so `.clamp(min=0)` is relu. Values that got cut off get no gradient.

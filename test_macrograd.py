@@ -383,6 +383,47 @@ def test_sum_over_axis():
     gradcheck(lambda m: (m.sum(axis=0, keepdim=True) @ w).sum(), a)
 
 
+def test_cumsum():
+    a = tensor([1.0, 2.0, 3.0, 4.0])
+    c = a.cumsum(0)
+    assert c.data == [1.0, 3.0, 6.0, 10.0] and c.shape == (4,)
+    # a[j] is in every running total from position j on, so it's counted 4 - j times
+    c.sum().backward()
+    assert a.grad == [4.0, 3.0, 2.0, 1.0]
+
+    m = tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+    assert m.cumsum(0).data == [1.0, 2.0, 3.0, 5.0, 7.0, 9.0] and m.cumsum(0).shape == (2, 3)
+    assert m.cumsum(1).data == [1.0, 3.0, 6.0, 4.0, 9.0, 15.0]
+    assert m.cumsum(-1).data == m.cumsum(1).data
+
+    random.seed(41)
+    x = rand_shape(2, 3, 4)
+    for axis in [0, 1, 2]:
+        c = x.cumsum(axis)
+        assert c.shape == x.shape
+        for i in range(2):
+            for j in range(3):
+                for k in range(4):
+                    index = [i, j, k]
+                    expected = math.fsum(x.get_element(*(index[:axis] + [t] + index[axis + 1:]))
+                                         for t in range(index[axis] + 1))
+                    assert close(c.get_element(*index), expected)
+        # the last running total along the axis is the sum over it
+        last = [slice(None)] * 3
+        last[axis] = -1
+        assert c[tuple(last)].data == x.sum(axis=axis).data
+
+        # distinct weights, so a grad landing in the wrong position would show up
+        weights = tensor([0.3 * v - 1.5 for v in range(24)], shape=x.shape)
+        gradcheck(lambda t: (t.cumsum(axis) * weights).sum(), x)
+    gradcheck(lambda t: (t.cumsum(1) * t).sum(), x)
+    gradcheck(lambda t: t.cumsum(0).cumsum(2).tanh().sum(), x)
+
+    assert raises(lambda: x.cumsum(3), IndexError)
+    assert raises(lambda: x.cumsum(-4), IndexError)
+    assert raises(lambda: tensor(3.0).cumsum(0), IndexError)
+
+
 def test_full_broadcasting():
     col = tensor([[1.0], [2.0], [3.0]])
     row = tensor([10.0, 20.0, 30.0, 40.0])
