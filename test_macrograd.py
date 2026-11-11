@@ -9,7 +9,7 @@ import weakref
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
-from optim import SGD, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
+from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
 from data import batches
 
 
@@ -960,6 +960,103 @@ def test_sgd_momentum_and_weight_decay():
             opt.step()
         finals.append(abs(w.data[0]))
     assert finals[1] < finals[0]
+
+
+def test_adagrad():
+    # steady gradient of 1: after t steps s = t, so step t moves lr / sqrt(t)
+    w = tensor([0.0])
+    opt = Adagrad([w], lr=0.1)
+    expected = 0.0
+    for t in range(1, 6):
+        w.grad = [1.0]
+        opt.step()
+        expected -= 0.1 / t ** 0.5
+        assert close(w.data[0], expected)
+    assert opt.sum_sq == [[5.0]]
+
+    # every weight gets its own scale: gradients of 0.01 and 100 give the same steps
+    w = tensor([0.0, 0.0])
+    opt = Adagrad([w], lr=0.1)
+    for _ in range(3):
+        w.grad = [0.01, 100.0]
+        opt.step()
+    # (equal up to eps, which is 1e-8 of sqrt(s) for the small gradient)
+    assert close(w.data[0], w.data[1], rel=1e-6) and close(w.data[1], -0.1 * (1 + 2 ** -0.5 + 3 ** -0.5))
+
+    # a weight that gets its first gradient late takes a full lr step, while one that got a
+    # gradient every step is down to lr / sqrt(10). a zero gradient doesn't move a weight
+    w = tensor([0.0, 0.0])
+    opt = Adagrad([w], lr=0.1)
+    for t in range(10):
+        before = w.data[:]
+        w.grad = [1.0, 1.0 if t == 9 else 0.0]
+        opt.step()
+        if t < 9:
+            assert w.data[1] == 0.0
+    assert close(before[0] - w.data[0], 0.1 / 10 ** 0.5) and close(before[1] - w.data[1], 0.1)
+
+    # eps is added after the square root, so a gradient as small as eps moves only lr / 2
+    w = tensor([0.0])
+    w.grad = [1e-10]
+    Adagrad([w], lr=0.1).step()
+    assert close(w.data[0], -0.05)
+
+    assert raises(lambda: Adagrad([w], eps=0.0), ValueError)
+
+
+def test_rmsprop():
+    # steady gradient g: after t steps v = (1 - alpha^t) * g^2. v starts at 0, so the first
+    # step is lr / sqrt(1 - alpha) = 10 * lr, and later steps come down toward lr
+    w = tensor([0.0])
+    opt = RMSprop([w], lr=0.01)
+    expected = 0.0
+    for t in range(1, 6):
+        w.grad = [2.0]
+        opt.step()
+        expected -= 0.01 * 2.0 / ((1 - 0.99 ** t) ** 0.5 * 2.0 + 1e-8)
+        assert close(w.data[0], expected)
+        if t == 1:
+            assert close(w.data[0], -0.1, rel=1e-6)
+    assert close(opt.v[0][0], (1 - 0.99 ** 5) * 4.0)
+
+    # every weight gets its own scale: gradients of 0.01 and 100 give the same steps
+    w = tensor([0.0, 0.0])
+    opt = RMSprop([w], lr=0.01, alpha=0.9)
+    for _ in range(3):
+        w.grad = [0.01, 100.0]
+        opt.step()
+    assert close(w.data[0], w.data[1], rel=1e-4)
+
+    # after gradients of 10 for 100 steps and then 1 for 1000, RMSprop has forgotten the big
+    # ones and steps about lr again. Adagrad still divides by sqrt(100 * 10^2 + 1000)
+    a, b = tensor([0.0]), tensor([0.0])
+    adagrad, rmsprop = Adagrad([a], lr=0.01), RMSprop([b], lr=0.01)
+    for t in range(1100):
+        before = a.data[0], b.data[0]
+        a.grad = b.grad = [10.0 if t < 100 else 1.0]
+        adagrad.step()
+        rmsprop.step()
+    assert close(before[0] - a.data[0], 0.01 / 11000 ** 0.5)
+    assert abs((before[1] - b.data[0]) - 0.01) < 1e-4
+
+    # both train a small network
+    random.seed(10)
+    x, y = rand_tensor(8, 3), rand_tensor(8, 1)
+    for opt_class, lr in [(Adagrad, 0.1), (RMSprop, 0.01)]:
+        random.seed(11)
+        model = MLP([3, 8, 1])
+        opt = opt_class(model.parameters(), lr=lr)
+        first = model(x).mse_loss(y).data[0]
+        for _ in range(100):
+            loss = model(x).mse_loss(y)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        assert model(x).mse_loss(y).data[0] < 0.05 * first
+
+    assert raises(lambda: RMSprop([w], alpha=1.0), ValueError)
+    assert raises(lambda: RMSprop([w], alpha=-0.1), ValueError)
+    assert raises(lambda: RMSprop([w], eps=0.0), ValueError)
 
 
 def test_adamw():

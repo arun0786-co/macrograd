@@ -30,6 +30,60 @@ class SGD(optimizer):
                 v[i] = self.momentum * v[i] + g
                 p.data[i] -= self.lr * v[i]
 
+class Adagrad(optimizer):
+    # gives every weight its own step size by dividing by the size of all its gradients so far:
+    #   s = s + g^2
+    #   w -= lr * g / (sqrt(s) + eps)
+    # weights with big gradients get small steps and weights with small ones get big steps.
+    # s only grows, so the steps keep shrinking: with a steady gradient the t-th step is
+    # lr / sqrt(t). a weight that rarely gets a gradient, like the embedding row of a rare
+    # word, keeps a small s and so keeps taking big steps when it does get one (Duchi et al.,
+    # 2011). on long runs the shrinking can stop training too early, which RMSprop fixes.
+    # eps turns 0 / 0 into a step of 0 while s is still 0, and otherwise only changes
+    # steps for gradients about as small as eps itself
+    def __init__(self, parameters, lr=0.01, eps=1e-10):
+        super().__init__(parameters, lr)
+        if eps <= 0:
+            raise ValueError(f"eps must be > 0, got {eps}")
+        self.eps = eps
+        self.sum_sq = [[0.0] * len(p.data) for p in self.parameters]
+
+    def step(self):
+        for p, s in zip(self.parameters, self.sum_sq):
+            for i in range(len(p.data)):
+                g = p.grad[i]
+                s[i] += g * g
+                p.data[i] -= self.lr * g / (s[i] ** 0.5 + self.eps)
+
+
+class RMSprop(optimizer):
+    # like Adagrad, but it divides by a running average of recent squared gradients
+    # instead of the sum of all of them (Tieleman and Hinton, 2012):
+    #   v = alpha * v + (1 - alpha) * g^2
+    #   w -= lr * g / (sqrt(v) + eps)
+    # sqrt(v) is about the size of recent gradients, so each step is about lr whatever the
+    # gradient's scale. the average forgets old gradients (alpha = 0.99 mostly reflects the
+    # last 100 steps or so), so the steps don't shrink forever and follow the gradients
+    # when they change. v starts at 0 and isn't corrected for that, so the first steps are
+    # bigger than lr: the first one is lr / sqrt(1 - alpha), 10 * lr with alpha = 0.99.
+    # Adam is RMSprop plus momentum and that correction
+    def __init__(self, parameters, lr=0.01, alpha=0.99, eps=1e-8):
+        super().__init__(parameters, lr)
+        if not 0 <= alpha < 1:
+            raise ValueError(f"alpha must be in [0, 1), got {alpha}")
+        if eps <= 0:
+            raise ValueError(f"eps must be > 0, got {eps}")
+        self.alpha = alpha
+        self.eps = eps
+        self.v = [[0.0] * len(p.data) for p in self.parameters]
+
+    def step(self):
+        for p, v in zip(self.parameters, self.v):
+            for i in range(len(p.data)):
+                g = p.grad[i]
+                v[i] = self.alpha * v[i] + (1 - self.alpha) * g * g
+                p.data[i] -= self.lr * g / (v[i] ** 0.5 + self.eps)
+
 class Adam(optimizer):
     def __init__(self, parameters, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
         super().__init__(parameters, lr)
