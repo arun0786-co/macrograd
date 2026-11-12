@@ -213,3 +213,34 @@ class CosineAnnealingLR(lr_scheduler):
     def lr_at(self, epoch):
         epoch = min(epoch, self.T_max)
         return self.eta_min + (self.base_lr - self.eta_min) * (1 + _cos(PI * epoch / self.T_max)) / 2
+
+class LinearWarmup(lr_scheduler):
+    # starts with a small lr and raises it in equal steps to the optimizer's lr:
+    #   lr = base_lr * (epoch + 1) / (warmup_steps + 1)     while epoch < warmup_steps
+    # that's base_lr / (warmup_steps + 1) at epoch 0, never 0, so no step is wasted, and
+    # base_lr at epoch warmup_steps. from there on it's base_lr, or the lr of the `after`
+    # schedule counted from that schedule's own epoch 0:
+    #   LinearWarmup(opt, 100, after=CosineAnnealingLR(opt, T_max=900))
+    # make `after` first, so it reads the full lr, and only call the warmup's step().
+    # early on the weights are random, and Adam's and RMSprop's averages of the squared
+    # gradients come from only a few steps (RMSprop's first step is 10 * lr), so full-size
+    # steps can throw the weights far off. small first steps give those averages time to
+    # settle. transformers have been trained with warmup since Vaswani et al. (2017).
+    # unlike the other schedules this one sets the lr as soon as it's made, so epoch 0
+    # already uses the small lr
+    def __init__(self, optimizer, warmup_steps, after=None):
+        if isinstance(warmup_steps, bool) or not isinstance(warmup_steps, int) or warmup_steps < 1:
+            raise ValueError(f"warmup_steps must be an int >= 1, got {warmup_steps!r}")
+        if after is not None and (not isinstance(after, lr_scheduler) or after.optimizer is not optimizer):
+            raise ValueError("after must be a schedule for the same optimizer")
+        super().__init__(optimizer)
+        self.warmup_steps = warmup_steps
+        self.after = after
+        optimizer.lr = self.lr_at(0)
+
+    def lr_at(self, epoch):
+        if epoch < self.warmup_steps:
+            return self.base_lr * (epoch + 1) / (self.warmup_steps + 1)
+        if self.after is None:
+            return self.base_lr
+        return self.after.lr_at(epoch - self.warmup_steps)

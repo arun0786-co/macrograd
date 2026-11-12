@@ -9,7 +9,7 @@ import weakref
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
-from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR
+from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup
 from data import batches
 
 
@@ -1175,6 +1175,62 @@ def test_lr_schedules():
     assert raises(lambda: StepLR(opt, step_size=2, gamma=0.0), ValueError)
     assert raises(lambda: CosineAnnealingLR(opt, T_max=0), ValueError)
     assert raises(lambda: CosineAnnealingLR(opt, T_max=10, eta_min=-0.1), ValueError)
+
+
+def test_linear_warmup():
+    def lrs_over(opt, sched, epochs):
+        lrs = [opt.lr]
+        for _ in range(epochs):
+            sched.step()
+            lrs.append(opt.lr)
+        return lrs
+
+    # 3 warmup steps from 0.4: equal steps of 0.1 up to 0.4, then it stays there.
+    # the small lr is set as soon as the warmup is made, so epoch 0 uses it
+    opt = SGD([tensor([0.0])], lr=0.4)
+    sched = LinearWarmup(opt, 3)
+    assert close(opt.lr, 0.1) and sched.base_lr == 0.4
+    for got, want in zip(lrs_over(opt, sched, 6), [0.1, 0.2, 0.3, 0.4, 0.4, 0.4, 0.4]):
+        assert close(got, want)
+
+    # then cosine, starting from its own epoch 0 once the warmup is done
+    opt = Adam([tensor([0.0])], lr=1.0)
+    sched = LinearWarmup(opt, 2, after=CosineAnnealingLR(opt, T_max=4, eta_min=0.1))
+    cosine = [0.1 + 0.9 * (1 + math.cos(math.pi * e / 4)) / 2 for e in range(5)]
+    for got, want in zip(lrs_over(opt, sched, 8), [1 / 3, 2 / 3] + cosine + [0.1, 0.1]):
+        assert close(got, want)
+
+    # and StepLR the same way
+    opt = SGD([tensor([0.0])], lr=0.8)
+    sched = LinearWarmup(opt, 1, after=StepLR(opt, step_size=2, gamma=0.5))
+    for got, want in zip(lrs_over(opt, sched, 5), [0.4, 0.8, 0.8, 0.4, 0.4, 0.2]):
+        assert close(got, want)
+
+    # the optimizer steps with the warmed-up lr from the first step on
+    w = tensor([0.0])
+    opt = SGD([w], lr=0.3)
+    sched = LinearWarmup(opt, 2)
+    for _ in range(4):
+        w.grad = [1.0]
+        opt.step()
+        sched.step()
+    assert close(w.data[0], -(0.1 + 0.2 + 0.3 + 0.3))
+
+    # RMSprop's first step is 10 * lr, because its average of squared gradients starts at
+    # 0. with 9 warmup steps the first step is lr instead
+    w = tensor([0.0])
+    opt = RMSprop([w], lr=0.01)
+    LinearWarmup(opt, 9)
+    w.grad = [5.0]
+    opt.step()
+    assert close(w.data[0], -0.01, rel=1e-6)
+
+    other = SGD([tensor([0.0])], lr=0.1)
+    assert raises(lambda: LinearWarmup(opt, 0), ValueError)
+    assert raises(lambda: LinearWarmup(opt, 2.5), ValueError)
+    assert raises(lambda: LinearWarmup(opt, True), ValueError)
+    assert raises(lambda: LinearWarmup(opt, 3, after=StepLR(other, step_size=2)), ValueError)
+    assert raises(lambda: LinearWarmup(opt, 3, after=lambda epoch: 0.1), ValueError)
 
 
 def test_batches():
