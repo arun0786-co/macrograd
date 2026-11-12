@@ -2,9 +2,11 @@ import json
 import random
 try:
     from .engine import tensor
+    from .optim import PI, _cos
 except ImportError:
     # run as a script from this folder, not imported as a package
     from engine import tensor
+    from optim import PI, _cos
 
 class module:
     def __init__(self):
@@ -280,6 +282,44 @@ def sample(logits, temperature=1.0, top_k=None, rng=None):
             pick = max(i for i, p in enumerate(probs) if p > 0)
         picks.append(pick)
     return picks if len(logits.shape) == 2 else picks[0]
+
+
+def _cos_any(x):
+    # optim's _cos is a Taylor series, which gets less accurate further from 0. cos repeats
+    # every 2 pi, so take x mod 2 pi first. on [0, 2 pi] the 20 terms are accurate to about 2e-14
+    return _cos(x % (2 * PI))
+
+
+def sinusoidal_positions(length, dim, base=10000.0):
+    # a fixed (length, dim) table with one row per position, to add to the token vectors
+    # instead of a learned position embedding (Vaswani et al., 2017). the columns come in
+    # pairs, and pair i turns at its own speed w_i:
+    #   pe[p, 2i] = sin(p * w_i),  pe[p, 2i + 1] = cos(p * w_i),  w_i = 1 / base^(2i / dim)
+    # the first pair turns once every 2 pi ~ 6 positions and the last one about once every
+    # 2 pi * base positions, so near positions differ in the fast pairs and far ones in the
+    # slow pairs. moving k positions on turns every pair by an angle that depends only on k:
+    #   sin((p + k) w) = sin(p w) cos(k w) + cos(p w) sin(k w)
+    #   cos((p + k) w) = cos(p w) cos(k w) - sin(p w) sin(k w)
+    # so row p + k is row p times a matrix that is the same for every p, and a linear layer
+    # can learn to look a fixed number of positions back. the table has no weights, so it
+    # works for any length, including ones longer than seen in training.
+    # it's a constant: nothing to learn and no backward
+    for name, value, low in (("length", length, 1), ("dim", dim, 2)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < low:
+            raise ValueError(f"{name} must be an int >= {low}, got {value!r}")
+    if dim % 2:
+        raise ValueError(f"dim must be even, since the columns come in sin/cos pairs, got {dim}")
+    if not base > 1:
+        raise ValueError(f"base must be > 1, got {base}")
+    speeds = [base ** (-2 * i / dim) for i in range(dim // 2)]
+    rows = []
+    for p in range(length):
+        row = []
+        for w in speeds:
+            # sin(x) = cos(x - pi/2)
+            row += [_cos_any(p * w - PI / 2), _cos_any(p * w)]
+        rows.append(row)
+    return tensor(rows)
 
 
 class MLP(module):

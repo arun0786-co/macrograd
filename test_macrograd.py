@@ -8,7 +8,7 @@ import weakref
 
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
-from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
+from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions
 from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup
 from data import batches
 
@@ -1535,6 +1535,50 @@ def test_embedding():
 
     for bad in [-1, 5, 1.5, True]:
         assert raises(lambda: emb([0, bad]), ValueError)
+
+
+def test_sinusoidal_positions():
+    # against math.sin and math.cos, including positions far past 2 pi
+    for length, dim, base in [(20, 8, 10000.0), (2000, 4, 10000.0), (5, 6, 100.0)]:
+        pe = sinusoidal_positions(length, dim, base)
+        assert pe.shape == (length, dim)
+        for p in range(length):
+            for i in range(dim // 2):
+                w = 1 / base ** (2 * i / dim)
+                assert close(pe.get_element(p, 2 * i), math.sin(p * w), abs_tol=1e-12)
+                assert close(pe.get_element(p, 2 * i + 1), math.cos(p * w), abs_tol=1e-12)
+    pe = sinusoidal_positions(2, 4)
+    assert all(close(a, b, abs_tol=1e-15) for a, b in zip(pe.data, [0.0, 1.0, 0.0, 1.0,
+                                                                 math.sin(1), math.cos(1), math.sin(0.01), math.cos(0.01)]))
+
+    # moving k positions on turns each pair by the same angle k * w, wherever it starts
+    pe = sinusoidal_positions(30, 8)
+    k = 7
+    for i in range(4):
+        w = 1 / 10000 ** (2 * i / 8)
+        for p in range(30 - k):
+            sin_p, cos_p = pe.get_element(p, 2 * i), pe.get_element(p, 2 * i + 1)
+            assert close(pe.get_element(p + k, 2 * i), sin_p * math.cos(k * w) + cos_p * math.sin(k * w), abs_tol=1e-12)
+            assert close(pe.get_element(p + k, 2 * i + 1), cos_p * math.cos(k * w) - sin_p * math.sin(k * w), abs_tol=1e-12)
+    # so how alike two rows are depends only on how far apart they are, and near rows are more alike
+    def dot(a, b):
+        return math.fsum(x * y for x, y in zip(pe[a].data, pe[b].data))
+    assert close(dot(3, 5), dot(20, 22), abs_tol=1e-12) and close(dot(10, 10), 4.0)
+    assert dot(10, 10) > dot(10, 11) > dot(10, 13)
+
+    # added to token vectors it gives the same token a different vector at each position
+    random.seed(24)
+    tok = embedding(10, 8)
+    x = tok(tensor([[3, 3, 3], [1, 2, 3]])) + sinusoidal_positions(3, 8)
+    assert x.shape == (2, 3, 8) and x[0, 0].data != x[0, 1].data
+    assert all(close(a, b) for a, b in zip(x[1, 2].data, x[0, 2].data))
+
+    assert raises_with(lambda: sinusoidal_positions(0, 4), ValueError, "length")
+    assert raises_with(lambda: sinusoidal_positions(True, 4), ValueError, "length")
+    assert raises_with(lambda: sinusoidal_positions(3.0, 4), ValueError, "length")
+    assert raises_with(lambda: sinusoidal_positions(3, 0), ValueError, "dim")
+    assert raises_with(lambda: sinusoidal_positions(3, 5), ValueError, "even")
+    assert raises_with(lambda: sinusoidal_positions(3, 4, base=1.0), ValueError, "base")
 
 
 def test_xavier_and_kaiming_init():
