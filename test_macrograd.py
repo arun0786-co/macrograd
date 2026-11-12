@@ -434,6 +434,62 @@ def test_cumsum():
     assert raises(lambda: tensor(3.0).cumsum(0), IndexError)
 
 
+def test_logsumexp():
+    def ref(values):
+        return math.log(math.fsum(math.exp(v) for v in values))
+
+    x = tensor([[1.0, 2.0, 3.0], [0.5, -1.0, 0.0]])
+    assert close(x.logsumexp().data[0], ref(x.data)) and x.logsumexp().shape == ()
+    assert x.logsumexp(keepdim=True).shape == (1, 1)
+    for axis in [0, 1, -1]:
+        for keepdim in [False, True]:
+            out = x.logsumexp(axis, keepdim)
+            assert out.shape == x.sum(axis, keepdim).shape
+    assert all(close(a, ref(row)) for a, row in zip(x.logsumexp(axis=1).data, [[1.0, 2.0, 3.0], [0.5, -1.0, 0.0]]))
+    assert all(close(a, ref(col)) for a, col in zip(x.logsumexp(axis=0).data, [[1.0, 0.5], [2.0, -1.0], [3.0, 0.0]]))
+    assert tensor(3.0).logsumexp().data == [3.0]
+
+    random.seed(26)
+    x = rand_shape(2, 3, 4, low=-3, high=3)
+    for axis in [None, 0, 1, 2]:
+        out = x.logsumexp(axis)
+        if axis == 1:
+            expected = [ref([x.get_element(a, k, c) for k in range(3)]) for a in range(2) for c in range(4)]
+            assert all(close(u, v) for u, v in zip(out.data, expected))
+        r = rand_shape(*out.shape)
+        gradcheck(lambda t: (t.logsumexp(axis) * r).sum(), x)
+    # x used twice: the grads from both add up
+    gradcheck(lambda t: t.logsumexp(axis=0).sum() + t.logsumexp(axis=2).sum(), x)
+
+    # numbers whose exp is too big or too small for a float: math.exp(1000) would overflow
+    x = tensor([[1000.0, 1000.0], [-1000.0, -1000.0], [1000.0, -1000.0], [-1000.0, 1000.0]])
+    assert all(close(a, b) for a, b in zip(x.logsumexp(axis=1).data,
+                                           [1000 + math.log(2), -1000 + math.log(2), 1000.0, 1000.0]))
+
+    # a smooth max: between the max and the max + log(n)
+    x = rand_shape(5, 6, low=-4, high=4)
+    for top, soft in zip(x.max(axis=1).data, x.logsumexp(axis=1).data):
+        assert top < soft < top + math.log(6)
+
+    # its grad is the softmax, and log_softmax is x minus it
+    x = rand_shape(3, 5)
+    x.logsumexp(axis=1).sum().backward()
+    assert all(close(a, b) for a, b in zip(x.grad, x.softmax().data))
+    diff = x - x.logsumexp(axis=-1, keepdim=True)
+    assert all(close(a, b) for a, b in zip(diff.data, x.log_softmax().data))
+
+    # a row of -inf (everything masked) gives -inf, and a row with inf gives inf, and neither
+    # gets a grad. one -inf in a row is just left out
+    inf = float("inf")
+    x = tensor([[-inf, -inf], [0.0, -inf], [inf, 1.0]])
+    out = x.logsumexp(axis=1)
+    assert out.data == [-inf, 0.0, inf]
+    out.backward()
+    assert x.grad == [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+
+    assert raises(lambda: tensor([[1.0, 2.0]]).logsumexp(axis=2), IndexError)
+
+
 def test_full_broadcasting():
     col = tensor([[1.0], [2.0], [3.0]])
     row = tensor([10.0, 20.0, 30.0, 40.0])

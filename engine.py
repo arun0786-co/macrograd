@@ -853,6 +853,49 @@ class tensor:
         out._backward = _backward
         return out
 
+    def logsumexp(self, axis=None, keepdim=False):
+        # log(sum of exp(x)) over one axis, or over everything with axis=None. exp(1000) is
+        # already too big for a float, so first take out the largest value m:
+        #   logsumexp(x) = m + log(sum over k of exp(x_k - m))
+        # then no exp is bigger than 1, and the largest is exactly 1, so the sum is at least 1
+        # and its log can't be -inf either. it's a smooth max: it lies between max(x) and
+        # max(x) + log(n), closer to max(x) the more the largest value stands out.
+        # d out / d x_i = exp(x_i) / sum over k of exp(x_k) = exp(x_i - out), which is the
+        # softmax, so backward gives x_i the output's grad times softmax_i.
+        # log_softmax(x) is x - logsumexp(x) over the last axis. if the largest value is
+        # infinite (like a row of all -inf from a mask), the answer is that value, and the
+        # row gets no grad
+        if axis is None:
+            outer, size, inner = 1, len(self.data), 1
+            shape = (1,) * len(self.shape) if keepdim else ()
+        else:
+            outer, size, inner, shape = self._reduce_layout(axis, keepdim)
+        if size == 0:
+            raise ValueError(f"Cannot take logsumexp over an empty axis of shape {self.shape}")
+
+        # groups[j] lists the input positions that go into output value j
+        groups = [[(o * size + k) * inner + r for k in range(size)] for o in range(outer) for r in range(inner)]
+        out_data = []
+        for group in groups:
+            m = max(self.data[i] for i in group)
+            if m in (float('inf'), float('-inf')):
+                out_data.append(m)
+                continue
+            total = sum(self._taylor_exp(self.data[i] - m) for i in group)
+            out_data.append(m + self._taylor_log(total))
+
+        out = tensor(out_data, shape=shape, children=(self,), op='logsumexp')
+
+        def _backward():
+            for j, group in enumerate(groups):
+                if out.data[j] in (float('inf'), float('-inf')):
+                    continue
+                for i in group:
+                    self.grad[i] += out.grad[j] * self._taylor_exp(self.data[i] - out.data[j])
+
+        out._backward = _backward
+        return out
+
     def mean(self, axis=None, keepdim=False):
         # sum divided by how many values went into each sum. built from sum and *, so
         # backward comes for free: each input gets out.grad / count
