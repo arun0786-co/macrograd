@@ -158,7 +158,8 @@ PI = 3.141592653589793
 def _cos(x, terms=20):
     # Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - ...
     # each term is the one before times -x^2 / ((2n+1)(2n+2)).
-    # only used with x in [0, pi], where 20 terms are accurate to about 1e-15
+    # the cosine schedule only uses x in [0, pi], where 20 terms are accurate to about 1e-15.
+    # nn's sinusoidal positions use [0, 2 pi], where they're accurate to about 2e-14
     result = 0.0
     term = 1.0
     for n in range(terms):
