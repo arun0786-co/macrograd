@@ -134,6 +134,7 @@ Layers subclass `module`. `.parameters()` finds every tensor a module stores, in
 - `AdamW` is Adam with decoupled weight decay. It shrinks the weights directly instead of adding the decay to the gradient.
 - `clip_grad_norm(parameters, max_norm)` scales all the gradients down together when their combined length is over `max_norm`. Call it between `backward()` and `step()`.
 - `StepLR(optimizer, step_size, gamma)` multiplies the lr by `gamma` every `step_size` epochs. `CosineAnnealingLR(optimizer, T_max, eta_min)` lowers it from the starting lr to `eta_min` along a half cosine over `T_max` epochs. Call the schedule's `.step()` once per epoch, after `optimizer.step()`.
+- `LinearWarmup(optimizer, warmup_steps, after=None)` starts at `lr / (warmup_steps + 1)` and raises the lr in equal steps to `lr` over the first `warmup_steps` steps. Then it hands over to `after` if you give it one, like `LinearWarmup(opt, 100, after=CosineAnnealingLR(opt, T_max=900))`. Small first steps give Adam's and RMSprop's gradient averages time to settle. It sets the small lr as soon as it's made, so the first step already uses it.
 
 ### data.py
 
