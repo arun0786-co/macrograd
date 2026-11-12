@@ -78,6 +78,21 @@ And cust, as we to thishat manou wast haves and ther'dter the I hest craints wer
 
 The run with the other seed did write names and short lines, so one 300-character sample doesn't separate the two models. The held-out loss does.
 
+`train_gpt.py` has three switches at the top, all off by default: `WARMUP` (steps of linear lr warmup before the cosine schedule), `POSITIONS = "sinusoidal"` (the fixed sin/cos table instead of a learned position embedding) and `LABEL_SMOOTHING` (for the training loss). Each one was tried on its own with both seeds. The saved models were then scored on 400 held-out batches, 51,200 characters, which gives steadier numbers than the 16 batches the script prints, so the default's loss here differs a little from the 2.18 above.
+
+| Setting | Held-out loss (first / second seed) | Next-character accuracy (first / second seed) |
+|---|---|---|
+| Defaults | 2.196 / 2.182 | 35.9% / 36.2% |
+| `WARMUP = 100` | 2.191 / 2.172 | 36.1% / 36.5% |
+| `POSITIONS = "sinusoidal"` | 2.197 / 2.176 | 36.0% / 36.3% |
+| `LABEL_SMOOTHING = 0.1` | 2.256 / 2.234 | 35.8% / 36.5% |
+
+- Warmup came out ahead on both seeds, by 0.005 and 0.010. The two default runs differ from each other by 0.014, so with two runs each this is at most a small help. The model already trains steadily at lr 0.01 without it.
+- The sinusoidal table did as well as the learned embedding, 0.001 behind on one seed and 0.006 ahead on the other, with 512 fewer parameters (16,993 in all).
+- Label smoothing made the loss worse by 0.05 to 0.06 on both seeds. That's expected, since the loss measures the probability given to the right character and smoothing trains the model to hold some of it back. The original transformer paper saw the same with perplexity. Accuracy moved by -0.1 and +0.3 points, about the size of the noise, so it didn't help that either. With smoothing on, the train loss the script prints includes the smoothing and reads about 0.3 higher than the held-out loss.
+
+The defaults stay as they were: none of the differences is clearly bigger than the gap between seeds, and the GPT numbers above, including the LSTM comparison, came from the defaults. All eight runs went at once, so each took about 43 minutes instead of 13.
+
 The datasets download into `datasets/` on the first run, and the saved weights go in `checkpoints/`.
 
 ## What's in it
