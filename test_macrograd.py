@@ -823,6 +823,53 @@ def test_nll_loss():
     gradcheck(lambda t: (t * 2.0).nll_loss([2, 2]), x)
 
 
+def test_nll_loss_label_smoothing():
+    logp = tensor([[-0.5, -1.0, -2.0], [-3.0, -0.1, -4.0]])
+    assert logp.nll_loss([2, 1], label_smoothing=0.0).data == logp.nll_loss([2, 1]).data
+    # by hand: the target is 0.9 + 0.1/3 on the label and 0.1/3 on the others
+    e = 0.1
+    expected = -math.fsum([(1 - e) * -2.0 + e / 3 * -3.5, (1 - e) * -0.1 + e / 3 * -7.1]) / 2
+    assert close(logp.nll_loss([2, 1], label_smoothing=e).data[0], expected)
+
+    # after log_softmax it's cross entropy against the smoothed target
+    logits = [[0.3, -0.2, 0.5, 1.0], [2.0, 0.1, -1.0, 0.0], [1000.0, 0.0, -1000.0, 3.0]]
+    labels = [1, 0, 2]
+    for e in [0.1, 0.25, 1.0]:
+        smoothed = [[(1 - e) * (j == label) + e / 4 for j in range(4)] for label in labels]
+        loss = tensor(logits).log_softmax().nll_loss(labels, label_smoothing=e).data[0]
+        assert close(loss, ref_cross_entropy(logits, smoothed))
+        assert close(loss, tensor(logits).cross_entropy_loss(tensor(smoothed)).data[0])
+    # with e = 1 the target is uniform and the labels don't matter
+    assert logp.nll_loss([0, 0], label_smoothing=1.0).data == logp.nll_loss([2, 1], label_smoothing=1.0).data
+
+    # the lowest loss is when the model predicts the smoothed target itself: the grad is 0
+    # there, and the loss is the target's entropy. one-hot targets would push on forever
+    e, label = 0.2, 3
+    target = [(1 - e) * (j == label) + e / 5 for j in range(5)]
+    x = tensor([[math.log(q) for q in target]])
+    loss = x.log_softmax().nll_loss([label], label_smoothing=e)
+    loss.backward()
+    assert close(loss.data[0], -math.fsum(q * math.log(q) for q in target))
+    assert all(abs(g) < 1e-12 for g in x.grad)
+    x.grad = [0.0] * 5
+    x.log_softmax().nll_loss([label]).backward()
+    assert close(x.grad[label], target[label] - 1)
+
+    # a class with probability 0 only matters if the target gives it some weight
+    logp = tensor([[0.0, float("-inf")]])
+    assert logp.nll_loss([0]).data == [0.0]
+    assert logp.nll_loss([0], label_smoothing=0.1).data == [float("inf")]
+    assert logp.nll_loss([1], label_smoothing=1.0).data == [float("inf")]
+
+    x = tensor(logits[:2])
+    for e in [0.1, 0.6, 1.0]:
+        gradcheck(lambda t: t.log_softmax().nll_loss([1, 3], label_smoothing=e), x)
+        gradcheck(lambda t: (t * 2.0).nll_loss([2, 2], label_smoothing=e), x)
+
+    for bad in [-0.1, 1.5, True, float("nan")]:
+        assert raises_with(lambda: logp.nll_loss([0], label_smoothing=bad), ValueError, "label_smoothing")
+
+
 def test_binary_cross_entropy_with_logits():
     def ref(xs, ts):
         total = 0.0

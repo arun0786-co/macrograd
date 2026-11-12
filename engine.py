@@ -1163,11 +1163,24 @@ class tensor:
         out._backward = _backward
         return out
 
-    def nll_loss(self, labels):
+    def nll_loss(self, labels, label_smoothing=0.0):
         # negative log likelihood: self holds log probabilities, one row per example
         # (usually from log_softmax), and labels holds the right class for each row as
         # an int. loss = -(1/rows) * sum over rows of self[row, label].
-        # only the picked values affect the loss, and each one gets grad -1/rows
+        # only the picked values affect the loss, and each one gets grad -1/rows.
+        # with one-hot targets the loss only reaches 0 at probability 1, so training keeps
+        # pushing the right class's score up and the model gets overconfident.
+        # label_smoothing = e moves e of the target onto all C classes evenly, so the target
+        # is 1 - e + e/C for the right class and e/C for each of the others:
+        #   loss = -(1/rows) * sum over rows of ((1 - e) * self[row, label] + (e/C) * sum over j of self[row, j])
+        # that's cross entropy against the smoothed target, which is lowest when the model
+        # predicts exactly that target, and then it equals the target's entropy, not 0
+        # (Szegedy et al., 2016). each value gets grad -(e/C)/rows, and the picked ones
+        # another -(1 - e)/rows. the original transformer used e = 0.1, which made its
+        # perplexity worse but its translations better
+        if isinstance(label_smoothing, bool) or not 0 <= label_smoothing <= 1:
+            raise ValueError(f"label_smoothing must be in [0, 1], got {label_smoothing!r}")
+        e = label_smoothing
         C = self.shape[-1] if self.shape else 1
         rows = len(self.data) // C
         labels = labels.data if isinstance(labels, tensor) else list(labels)
@@ -1179,12 +1192,21 @@ class tensor:
                 raise ValueError(f"Label {label!r} is not a class index in 0..{C - 1}")
             picked.append(r * C + int(label))
 
-        loss_val = -sum(self.data[i] for i in picked) / rows
-        out = tensor([loss_val], shape=(), children=(self,), op='nll_loss')
+        # a class the model gives probability 0 has log probability -inf. that's fine where
+        # the target is 0 too, but 0 * -inf is nan, so a term with weight 0 is skipped
+        total = 0.0
+        if e < 1:
+            total += (1 - e) * sum(self.data[i] for i in picked)
+        if e > 0:
+            total += e / C * sum(self.data)
+        out = tensor([-total / rows], shape=(), children=(self,), op='nll_loss')
 
         def _backward():
+            g = out.grad[0] / rows
+            for i in range(len(self.data)):
+                self.grad[i] -= g * e / C
             for i in picked:
-                self.grad[i] += -out.grad[0] / rows
+                self.grad[i] -= g * (1 - e)
 
         out._backward = _backward
         return out
