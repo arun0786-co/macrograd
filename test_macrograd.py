@@ -7,7 +7,7 @@ import tempfile
 import weakref
 
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
-from nn import MLP, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
+from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample
 from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup
 from data import batches
@@ -1732,6 +1732,67 @@ def test_max_pool2d_and_flatten():
     assert raises(lambda: rand_shape(1, 1, 2, 2).max_pool2d(3), ValueError)
     assert raises(lambda: rand_shape(1, 1, 4, 4).max_pool2d(2, stride=0), ValueError)
     assert raises(lambda: x.flatten(4), IndexError)
+
+
+def test_avg_pool2d():
+    x = tensor([[[[1.0, 3.0, 2.0, 0.0],
+                  [4.0, 2.0, 1.0, 5.0],
+                  [0.0, 1.0, 9.0, 8.0],
+                  [7.0, 6.0, 3.0, 2.0]]]])
+    out = x.avg_pool2d(2)
+    assert out.shape == (1, 1, 2, 2) and out.data == [2.5, 2.0, 3.5, 5.5]
+
+    # every value in a window gets a quarter of that window's grad
+    (out * tensor([[[[1.0, 2.0], [3.0, 4.0]]]])).sum().backward()
+    assert x.grad == [0.25, 0.25, 0.5, 0.5,
+                      0.25, 0.25, 0.5, 0.5,
+                      0.75, 0.75, 1.0, 1.0,
+                      0.75, 0.75, 1.0, 1.0]
+
+    # overlapping windows (stride 1): the middle value is in all four windows, a corner in one
+    x = tensor([[[[1.0, 2.0, 0.0], [3.0, 9.0, 4.0], [0.0, 5.0, 1.0]]]])
+    out = x.avg_pool2d(2, stride=1)
+    assert out.data == [3.75, 3.75, 4.25, 4.75]
+    out.sum().backward()
+    assert x.grad == [0.25, 0.5, 0.25, 0.5, 1.0, 0.5, 0.25, 0.5, 0.25]
+
+    random.seed(23)
+    for N, C, H, W, K, stride in [(2, 3, 5, 6, 2, None), (1, 2, 7, 7, 3, 2), (2, 1, 4, 5, 2, 1), (1, 1, 3, 4, 1, None)]:
+        x = rand_shape(N, C, H, W)
+        S = stride or K
+        out = x.avg_pool2d(K, stride)
+        OH, OW = (H - K) // S + 1, (W - K) // S + 1
+        assert out.shape == (N, C, OH, OW)
+        expected = [math.fsum(x.get_element(n, c, i * S + a, j * S + b) for a in range(K) for b in range(K)) / K ** 2
+                    for n in range(N) for c in range(C) for i in range(OH) for j in range(OW)]
+        assert all(close(a, b) for a, b in zip(out.data, expected))
+        r = rand_shape(N, C, OH, OW)
+        gradcheck(lambda a: (a.avg_pool2d(K, stride) * r).sum(), x)
+
+    # on one channel it's a conv with a filter of 1 / K^2 everywhere
+    x = rand_shape(2, 1, 6, 5)
+    mean_filter = tensor([1 / 9] * 9, shape=(1, 1, 3, 3))
+    for stride in [1, 2, 3]:
+        assert all(close(a, b) for a, b in zip(x.avg_pool2d(3, stride).data, x.conv2d(mean_filter, stride).data))
+    # a window as big as the image is the mean of each channel (global average pooling)
+    x = rand_shape(2, 3, 4, 4)
+    assert all(close(a, b) for a, b in zip(x.avg_pool2d(4).data, x.mean(axis=3).mean(axis=2).data))
+
+    # the layer wraps the op and has no parameters
+    pool = avg_pool2d(2)
+    assert pool.parameters() == [] and pool(x).data == x.avg_pool2d(2).data
+    assert avg_pool2d(3, 1)(x).data == x.avg_pool2d(3, 1).data
+    assert repr(pool) == "AvgPool2d(kernel_size=2, stride=2)" and repr(avg_pool2d(3, 1)) == "AvgPool2d(kernel_size=3, stride=1)"
+    model = sequential(conv2d(3, 4, 3, padding=1), lambda h: h.relu(), avg_pool2d(2), flatten(), linear(4 * 2 * 2, 3))
+    y = rand_shape(2, 3)
+    gradcheck(lambda *params: model(x).mse_loss(y), *model.parameters())
+
+    assert raises_with(lambda: rand_shape(3, 4, 4).avg_pool2d(2), ValueError, "(N, C, H, W)")
+    assert raises_with(lambda: rand_shape(1, 1, 2, 2).avg_pool2d(3), ValueError, "doesn't fit")
+    assert raises_with(lambda: rand_shape(1, 1, 4, 4).avg_pool2d(2, stride=0), ValueError, "stride")
+    assert raises_with(lambda: rand_shape(1, 1, 4, 4).avg_pool2d(0), ValueError, "kernel_size")
+    assert raises_with(lambda: rand_shape(1, 1, 4, 4).avg_pool2d(True), ValueError, "kernel_size")
+    assert raises_with(lambda: rand_shape(1, 1, 4, 4).avg_pool2d(2.0), ValueError, "kernel_size")
 
 
 def test_rnn_cell():

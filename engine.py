@@ -373,6 +373,49 @@ class tensor:
         out._backward = _backward
         return out
 
+    def avg_pool2d(self, kernel_size, stride=None):
+        # like max_pool2d, but each window gives the mean of its values instead of the largest:
+        #   out[n, c, i, j] = sum over a, b of x[n, c, i*stride + a, j*stride + b] / kernel_size^2
+        # stride defaults to kernel_size, and the output size is the same as max_pool2d's.
+        # every value in a window counts the same, so backward gives each of them
+        # g / kernel_size^2. when windows overlap, a value gets a share from each window it's in
+        if len(self.shape) != 4:
+            raise ValueError(f"avg_pool2d needs (N, C, H, W) images, got shape {self.shape}")
+        if stride is None:
+            stride = kernel_size
+        for name, value in (("kernel_size", kernel_size), ("stride", stride)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be an int >= 1, got {value}")
+        N, C, H, W = self.shape
+        K = kernel_size
+        OH = (H - K) // stride + 1
+        OW = (W - K) // stride + 1
+        if OH < 1 or OW < 1:
+            raise ValueError(f"Window {K}x{K} doesn't fit in a {H}x{W} image")
+
+        # windows[k] lists the positions in self.data that output value k averages
+        offsets = [a * W + b for a in range(K) for b in range(K)]
+        windows = []
+        for nc in range(N * C):
+            base = nc * H * W
+            for i in range(OH):
+                for j in range(OW):
+                    corner = base + i * stride * W + j * stride
+                    windows.append([corner + d for d in offsets])
+
+        scale = 1.0 / (K * K)
+        out_data = [sum(self.data[p] for p in window) * scale for window in windows]
+        out = tensor(out_data, shape=(N, C, OH, OW), children=(self,), op='avg_pool2d')
+
+        def _backward():
+            for k, window in enumerate(windows):
+                g = out.grad[k] * scale
+                for p in window:
+                    self.grad[p] += g
+
+        out._backward = _backward
+        return out
+
     def flatten(self, start_dim=0):
         # joins every dim from start_dim on into one: an (N, C, H, W) batch of images
         # becomes (N, C * H * W) with flatten(1), ready for a linear layer.

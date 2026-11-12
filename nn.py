@@ -391,6 +391,20 @@ class max_pool2d(module):
         return f"MaxPool2d(kernel_size={self.kernel_size}, stride={self.stride or self.kernel_size})"
 
 
+class avg_pool2d(module):
+    # averages each kernel_size x kernel_size window of every channel
+    def __init__(self, kernel_size, stride=None):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+
+    def __call__(self, x):
+        return x.avg_pool2d(self.kernel_size, self.stride)
+
+    def __repr__(self):
+        return f"AvgPool2d(kernel_size={self.kernel_size}, stride={self.stride or self.kernel_size})"
+
+
 class flatten(module):
     # joins every dim from start_dim on, so (N, C, H, W) conv outputs become (N, C * H * W)
     # rows for a linear layer. start_dim=1 keeps the batch dim
