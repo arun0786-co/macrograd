@@ -98,6 +98,7 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 - `.rms_norm(eps)` divides each row by its root mean square, `sqrt(mean(x^2) + eps)`. It's layer norm without subtracting the mean, as used in LLaMA.
 - `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images and zero-pads the edges. `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel, and `.avg_pool2d(kernel_size, stride)` takes the mean of each window. A window as big as the image gives each channel's mean.
 - Losses: `mse_loss`, `cross_entropy_loss` (softmax per row, averaged over the batch, one node in the graph), `nll_loss(labels)` for integer labels after `log_softmax`, and `binary_cross_entropy_with_logits` for yes/no outputs, with the sigmoid built in.
+- `huber_loss(target, delta=1.0)` is squared error for errors up to `delta` and absolute error past it. Each value's gradient is its error clipped to `[-delta, delta]`, so a few far-off targets can't take over a step the way they do with `mse_loss`.
 - `nll_loss(labels, label_smoothing=e)` trains toward `1 - e + e/C` on the right class and `e/C` on each of the others instead of a one-hot target, so the model isn't pushed toward probability 1 forever. With smoothing the loss can't reach 0: its lowest value is the entropy of that target.
 - `accuracy(labels)` is the fraction of rows whose highest score is the right class.
 - `gradcheck(f, *inputs)` checks any backward pass against finite differences.

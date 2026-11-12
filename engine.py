@@ -1107,6 +1107,38 @@ class tensor:
         out._backward = _backward
         return out
     
+    def huber_loss(self, target, delta=1.0):
+        # squared error for small errors, absolute error for big ones (Huber, 1964). with
+        # d = self - target for each value:
+        #   loss(d) = d^2 / 2                   if |d| <= delta
+        #             delta * (|d| - delta / 2)  otherwise
+        # averaged over all values. the two pieces meet at |d| = delta with the same value
+        # and slope, so the loss is smooth. its grad per value is d clipped to [-delta, delta],
+        # divided by the number of values. with mse the grad grows with the error, so a few
+        # far-off values (outliers, bad labels) can take over the whole step; here each value
+        # pushes with at most delta. near 0 it acts like mse, so the steps still shrink as the
+        # error does, which absolute error alone wouldn't do.
+        # a delta bigger than every error gives mse_loss / 2. pytorch's smooth_l1_loss(beta)
+        # is huber_loss(delta=beta) / beta. like mse_loss, the target gets no grad
+        if self.shape != target.shape:
+            raise ValueError(f"Shape mismatch in huber_loss: {self.shape} vs {target.shape}")
+        if isinstance(delta, bool) or not delta > 0:
+            raise ValueError(f"delta must be > 0, got {delta!r}")
+        n = len(self.data)
+        diffs = [a - b for a, b in zip(self.data, target.data)]
+        total = 0.0
+        for d in diffs:
+            total += d * d / 2 if abs(d) <= delta else delta * (abs(d) - delta / 2)
+        out = tensor([total / n], shape=(), children=(self, target), op='huber_loss')
+
+        def _backward():
+            g = out.grad[0] / n
+            for i, d in enumerate(diffs):
+                self.grad[i] += g * max(-delta, min(delta, d))
+
+        out._backward = _backward
+        return out
+
     def cross_entropy_loss(self, target):
         if self.shape != target.shape:
             raise ValueError(f"Shape mismatch in cross_entropy_loss: {self.shape} vs {target.shape}")

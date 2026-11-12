@@ -870,6 +870,58 @@ def test_nll_loss_label_smoothing():
         assert raises_with(lambda: logp.nll_loss([0], label_smoothing=bad), ValueError, "label_smoothing")
 
 
+def test_huber_loss():
+    # errors 0.5, -2 and 2.5 with delta 1: 0.5^2 / 2, then 1 * (2 - 0.5) and 1 * (2.5 - 0.5)
+    x, y = tensor([0.5, -2.0, 3.0]), tensor([0.0, 0.0, 0.5])
+    loss = x.huber_loss(y)
+    assert close(loss.data[0], (0.125 + 1.5 + 2.0) / 3)
+    # each value's grad is its error clipped to [-delta, delta], over the number of values
+    loss.backward()
+    assert all(close(a, b) for a, b in zip(x.grad, [0.5 / 3, -1 / 3, 1 / 3]))
+    assert y.grad == [0.0, 0.0, 0.0]
+
+    def ref(xs, ys, delta):
+        terms = []
+        for a, b in zip(xs, ys):
+            d = abs(a - b)
+            terms.append(d * d / 2 if d <= delta else delta * (d - delta / 2))
+        return math.fsum(terms) / len(terms)
+
+    random.seed(25)
+    for shape, delta in [((4,), 1.0), ((2, 3), 0.3), ((3, 2, 2), 2.5)]:
+        x, y = rand_shape(*shape, low=-3, high=3), rand_shape(*shape, low=-3, high=3)
+        assert close(x.huber_loss(y, delta).data[0], ref(x.data, y.data, delta))
+        gradcheck(lambda a: a.huber_loss(y, delta), x)
+
+    # a delta bigger than every error is half the mse; one smaller than every error is
+    # delta times (mean absolute error - delta / 2)
+    x, y = rand_shape(2, 5), rand_shape(2, 5)
+    assert close(x.huber_loss(y, delta=10.0).data[0], x.mse_loss(y).data[0] / 2)
+    mean_abs = math.fsum(abs(a - b) for a, b in zip(x.data, y.data)) / 10
+    small = min(abs(a - b) for a, b in zip(x.data, y.data)) / 2
+    assert close(x.huber_loss(y, delta=small).data[0], small * (mean_abs - small / 2))
+
+    # at |d| = delta both pieces give delta^2 / 2, and the grad is delta from either side
+    for d in [0.7, -0.7]:
+        assert close(tensor([d]).huber_loss(tensor([0.0]), delta=0.7).data[0], 0.245)
+        for side in [-1e-9, 1e-9]:
+            x = tensor([d + side])
+            x.huber_loss(tensor([0.0]), delta=0.7).backward()
+            assert close(x.grad[0], math.copysign(0.7, d), rel=1e-8)
+
+    # an outlier: mse's grad grows with the error, huber's stays at delta
+    x, y = tensor([0.1, -0.2, 50.0]), tensor([0.0, 0.0, 0.0])
+    x.mse_loss(y).backward()
+    assert close(x.grad[2], 100 / 3)
+    x.grad = [0.0] * 3
+    x.huber_loss(y).backward()
+    assert close(x.grad[2], 1 / 3) and close(x.grad[0], 0.1 / 3)
+
+    assert raises_with(lambda: tensor([1.0, 2.0]).huber_loss(tensor([1.0])), ValueError, "Shape mismatch")
+    for bad in [0.0, -1.0, True, float("nan")]:
+        assert raises_with(lambda: tensor([1.0]).huber_loss(tensor([0.0]), delta=bad), ValueError, "delta")
+
+
 def test_binary_cross_entropy_with_logits():
     def ref(xs, ts):
         total = 0.0
