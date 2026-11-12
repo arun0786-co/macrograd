@@ -2420,12 +2420,19 @@ def test_transformer_block():
     assert raises(lambda: small(rand_shape(2, 3, 5)), ValueError)
 
 
-def ref_sample(row, temperature, top_k, rng):
+def ref_sample(row, temperature, top_k, rng, top_p=None):
     # math.exp weights that aren't normalized, and u scaled up to their total instead
     V = len(row)
     keep = sorted(range(V), key=lambda i: (-row[i], i))[:top_k or V]
     top = max(row[i] for i in keep)
     weights = [math.exp((row[i] - top) / temperature) if i in keep else 0.0 for i in range(V)]
+    if top_p is not None:
+        # keep is already highest first
+        total = math.fsum(weights)
+        for n in range(1, len(keep) + 1):
+            if math.fsum(weights[i] for i in keep[:n]) / total >= top_p:
+                break
+        weights = [w if i in keep[:n] else 0.0 for i, w in enumerate(weights)]
     u = rng.random() * math.fsum(weights)
     end = 0.0
     for i, w in enumerate(weights):
@@ -2436,6 +2443,7 @@ def ref_sample(row, temperature, top_k, rng):
 
 def test_sample():
     random.seed(33)
+    inf = float("-inf")
     z = [1.0, 2.0, 0.5, -1.0, 0.0, 2.0]
     probs = [math.exp(v) / math.fsum(math.exp(w) for w in z) for v in z]
 
@@ -2454,6 +2462,37 @@ def test_sample():
             ref_rng = random.Random(5)
             assert got == [ref_sample(z, temperature, top_k, ref_rng) for _ in range(200)], (temperature, top_k)
 
+    # and with top_p
+    for temperature in [0.3, 1.0, 2.5]:
+        for top_k, top_p in [(None, 0.3), (None, 0.5), (None, 0.8), (None, 0.95), (None, 1.0), (3, 0.8), (4, 0.6)]:
+            got = sample(tensor([z] * 200), temperature, top_k, top_p, rng=random.Random(6))
+            ref_rng = random.Random(6)
+            assert got == [ref_sample(z, temperature, top_k, ref_rng, top_p) for _ in range(200)], (temperature, top_k, top_p)
+
+    # top_p: the top ids' probabilities add up 0.36, 0.72, 0.85, 0.93, 0.98, 1. with top_p 0.8
+    # ids 1, 5 and 0 are kept, and drawn as often as their probabilities scaled up to add to 1
+    picks = sample(tensor([z] * N), top_p=0.8)
+    kept = probs[1] + probs[5] + probs[0]
+    assert set(picks) == {0, 1, 5}
+    for i in [0, 1, 5]:
+        p = probs[i] / kept
+        assert abs(picks.count(i) - N * p) < 5 * math.sqrt(N * p * (1 - p)), (i, picks.count(i), N * p)
+    # it's "at least top_p", so a top_p equal to the top probability keeps only that id
+    assert sample(tensor([z] * 100), top_p=tensor(z).softmax().data[1]) == [1] * 100
+    assert set(sample(tensor([z] * 200), top_p=0.5)) == {1, 5}
+    # it applies after top_k: of ids 1, 5 and 0, the first two already make up 0.84
+    assert set(sample(tensor([z] * 200), top_k=3, top_p=0.8)) == {1, 5}
+    # and after temperature: at 0.3 the two top ids hold 0.98 of the probability
+    assert set(sample(tensor([z] * 400), temperature=0.3, top_p=0.95)) == {1, 5}
+    # unlike top_k, how many ids it keeps depends on how sure the model is
+    sure, unsure = [5.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0] * 6
+    assert set(sample(tensor([sure] * 600), top_p=0.9)) == {0}
+    assert set(sample(tensor([unsure] * 600), top_p=0.9)) == set(range(6))
+    assert len(set(sample(tensor([sure] * 600), top_k=2))) == len(set(sample(tensor([unsure] * 600), top_k=2))) == 2
+    # top_p never brings back a -inf score
+    picks = sample(tensor([[inf, 0.0, 0.0, inf]] * 200), top_p=0.99)
+    assert set(picks) == {1, 2}
+
     # top_k: ids 1 and 5 tie for the top score, and on ties the lower index is kept
     assert set(sample(tensor([z] * 200), top_k=2)) == {1, 5}
     assert sample(tensor([z] * 50), top_k=1) == [1] * 50
@@ -2465,7 +2504,6 @@ def test_sample():
     assert random.getstate() == state
 
     # every row draws from its own scores, and a -inf score is never picked
-    inf = float("-inf")
     picks = sample(tensor([[inf, inf, 0.0], [0.0, inf, inf], [0.0, inf, 0.0]] * 100))
     assert picks[0::3] == [2] * 100 and picks[1::3] == [0] * 100 and set(picks[2::3]) == {0, 2}
 
@@ -2480,6 +2518,8 @@ def test_sample():
         assert raises(lambda: sample(tensor(z), temperature=bad), ValueError)
     for bad in [0, -2, 1.5, True]:
         assert raises(lambda: sample(tensor(z), top_k=bad), ValueError)
+    for bad in [0, 0.0, -0.1, 1.01, True, "0.5", float("nan")]:
+        assert raises_with(lambda: sample(tensor(z), top_p=bad), ValueError, "top_p")
     assert raises(lambda: sample(tensor(2.0)), ValueError)
     assert raises(lambda: sample(tensor([[z]])), ValueError)
     assert raises(lambda: sample(tensor([[0.0, 1.0], [inf, inf]])), ValueError)
