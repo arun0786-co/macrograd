@@ -230,7 +230,7 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     return scores.softmax() @ v
 
 
-def sample(logits, temperature=1.0, top_k=None, rng=None):
+def sample(logits, temperature=1.0, top_k=None, top_p=None, rng=None):
     # picks ids from a model's output scores, for generating text one token at a time.
     # logits is (V,) for one pick or (B, V) for one pick per row; returns an int, or a
     # list of B ints. each row becomes probabilities
@@ -239,6 +239,11 @@ def sample(logits, temperature=1.0, top_k=None, rng=None):
     # top score, above 1 flattens it towards uniform, and 0 always takes the top score.
     # top_k keeps only the k highest scores (ties go to the lower index) and gives the rest
     # probability 0, so a long tail of unlikely tokens can't be picked by bad luck.
+    # top_p (nucleus sampling, Holtzman et al., 2020) keeps the fewest top tokens whose
+    # probabilities add up to at least top_p, after temperature and top_k, and scales their
+    # probabilities up to add up to 1 again. when the model is sure, that's one or two
+    # tokens, and when it isn't, many. top_k keeps the same number either way, so it can cut
+    # off real options when the model is unsure and let in unlikely ones when it's sure.
     # the draw: lay the probabilities end to end along [0, 1), pick a uniform random u and
     # return the index whose segment u lands in. segment i has length p_i, so index i is
     # picked with chance p_i.
@@ -254,6 +259,8 @@ def sample(logits, temperature=1.0, top_k=None, rng=None):
         raise ValueError(f"temperature must be a finite number >= 0, got {temperature!r}")
     if top_k is not None and (isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1):
         raise ValueError(f"top_k must be an int >= 1 or None, got {top_k!r}")
+    if top_p is not None and (isinstance(top_p, bool) or not isinstance(top_p, (int, float)) or not 0 < top_p <= 1):
+        raise ValueError(f"top_p must be a number in (0, 1] or None, got {top_p!r}")
     V = logits.shape[-1]
     picks = []
     for start in range(0, len(logits.data), V):
@@ -268,6 +275,15 @@ def sample(logits, temperature=1.0, top_k=None, rng=None):
             picks.append(row.index(max(row)))
             continue
         probs = tensor([z / temperature for z in row]).softmax().data
+        if top_p is not None and top_p < 1:
+            # most likely first, and the lower index first on ties
+            kept, total = set(), 0.0
+            for i in sorted(range(V), key=lambda i: -probs[i]):
+                kept.add(i)
+                total += probs[i]
+                if total >= top_p:
+                    break
+            probs = [p / total if i in kept else 0.0 for i, p in enumerate(probs)]
         u = rng.random()
         end = 0.0
         pick = None
