@@ -775,6 +775,30 @@ class tensor:
         return out
     
 
+    def cos(self):
+        # cos of every value, from the Taylor series in _taylor_cos.
+        # d/dx cos(x) = -sin(x), so backward gives each value -sin(x) times the output's grad
+        out = tensor([self._taylor_cos(v) for v in self.data], shape=self.shape, children=(self,), op='cos')
+
+        def _backward():
+            for i, v in enumerate(self.data):
+                self.grad[i] -= self._taylor_cos(v - PI / 2) * out.grad[i]
+
+        out._backward = _backward
+        return out
+
+    def sin(self):
+        # sin(x) = cos(x - pi/2): the same wave moved a quarter turn.
+        # d/dx sin(x) = cos(x), so backward gives each value cos(x) times the output's grad
+        out = tensor([self._taylor_cos(v - PI / 2) for v in self.data], shape=self.shape, children=(self,), op='sin')
+
+        def _backward():
+            for i, v in enumerate(self.data):
+                self.grad[i] += self._taylor_cos(v) * out.grad[i]
+
+        out._backward = _backward
+        return out
+
     def leaky_relu(self, alpha=0.01):
         out_data = [0.0] * len(self.data)
         for i in range(len(self.data)):

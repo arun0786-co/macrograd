@@ -91,6 +91,41 @@ def test_sigmoid_and_tanh_grads():
     assert big.grad == [0.0, 0.0]
 
 
+def test_sin_and_cos():
+    xs = [0.0, 0.5, -0.5, 1.0, 3.0, -3.0, 2 * math.pi, 7.0, -12.5, 100.0, -1000.0]
+    x = tensor(xs)
+    assert all(close(a, math.sin(v), abs_tol=1e-12) for a, v in zip(x.sin().data, xs))
+    assert all(close(a, math.cos(v), abs_tol=1e-12) for a, v in zip(x.cos().data, xs))
+    assert x.cos().data[0] == 1.0 and x.sin().shape == x.cos().shape == (11,)
+
+    # sin^2 + cos^2 = 1, sin is odd and cos is even, and both repeat every 2 pi
+    random.seed(27)
+    x = rand_shape(3, 4, low=-10, high=10)
+    s, c = x.sin(), x.cos()
+    assert all(close(a * a + b * b, 1.0) for a, b in zip(s.data, c.data))
+    assert all(close(a, -b, abs_tol=1e-12) for a, b in zip((-x).sin().data, s.data))
+    assert all(close(a, b, abs_tol=1e-12) for a, b in zip((-x).cos().data, c.data))
+    assert all(close(a, b, abs_tol=1e-12) for a, b in zip((x + 2 * math.pi).sin().data, s.data))
+
+    # the grad of sin is cos, and the grad of cos is -sin
+    x.sin().sum().backward()
+    assert all(close(g, math.cos(v), abs_tol=1e-12) for g, v in zip(x.grad, x.data))
+    x.grad = [0.0] * 12
+    x.cos().sum().backward()
+    assert all(close(g, -math.sin(v), abs_tol=1e-12) for g, v in zip(x.grad, x.data))
+
+    r = rand_shape(3, 4)
+    gradcheck(lambda a: (a.sin() * r).sum(), x)
+    gradcheck(lambda a: (a.cos() * r).sum(), x)
+    gradcheck(lambda a: (a.sin() * a.cos() + a.cos().sin()).sum(), x)
+
+    # the position table is built from the same series
+    w = [1 / 10000 ** (2 * i / 8) for i in range(4)]
+    angles = tensor([[p * wi for wi in w] for p in range(10)])
+    pe = sinusoidal_positions(10, 8)
+    assert pe.data[0::2] == angles.sin().data and pe.data[1::2] == angles.cos().data
+
+
 def test_gelu():
     k = math.sqrt(2 / math.pi)
     for x in [-10.0, -3.0, -1.0, 0.0, 0.5, 1.0, 3.0, 10.0]:
