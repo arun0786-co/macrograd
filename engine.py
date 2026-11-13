@@ -10,6 +10,9 @@ def is_grad_enabled():
     return _grad_enabled
 
 
+PI = 3.141592653589793
+
+
 class tensor:
     def __init__(self, data, shape=None, children=(), op=''):
         if shape is None:
@@ -70,6 +73,21 @@ class tensor:
         for _ in range(halvings):
             result *= result
 
+        return result
+
+    @staticmethod
+    def _taylor_cos(x, terms=20):
+        # Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - ...
+        # each term is the one before times -x^2 / ((2n+1)(2n+2)).
+        # the series gets less accurate further from 0, and cos repeats every 2 pi, so x is
+        # taken mod 2 pi first. 20 terms are accurate to about 1e-15 on [0, pi] and about
+        # 2e-14 on [0, 2 pi]
+        x %= 2 * PI
+        result = 0.0
+        term = 1.0
+        for n in range(terms):
+            result += term
+            term *= -x * x / ((2 * n + 1) * (2 * n + 2))
         return result
 
     def exp(self):

@@ -1,3 +1,10 @@
+try:
+    from .engine import PI, tensor
+except ImportError:
+    # run as a script from this folder, not imported as a package
+    from engine import PI, tensor
+
+
 class optimizer:
     def __init__(self, parameters, lr):
         self.parameters = list(parameters)
@@ -153,20 +160,6 @@ def clip_grad_norm(parameters, max_norm):
                 p.grad[i] *= scale
     return total
 
-PI = 3.141592653589793
-
-def _cos(x, terms=20):
-    # Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - ...
-    # each term is the one before times -x^2 / ((2n+1)(2n+2)).
-    # the cosine schedule only uses x in [0, pi], where 20 terms are accurate to about 1e-15.
-    # nn's sinusoidal positions use [0, 2 pi], where they're accurate to about 2e-14
-    result = 0.0
-    term = 1.0
-    for n in range(terms):
-        result += term
-        term *= -x * x / ((2 * n + 1) * (2 * n + 2))
-    return result
-
 
 class lr_scheduler:
     # changes optimizer.lr as training goes on. call step() once per epoch, after
@@ -213,7 +206,7 @@ class CosineAnnealingLR(lr_scheduler):
 
     def lr_at(self, epoch):
         epoch = min(epoch, self.T_max)
-        return self.eta_min + (self.base_lr - self.eta_min) * (1 + _cos(PI * epoch / self.T_max)) / 2
+        return self.eta_min + (self.base_lr - self.eta_min) * (1 + tensor._taylor_cos(PI * epoch / self.T_max)) / 2
 
 class LinearWarmup(lr_scheduler):
     # starts with a small lr and raises it in equal steps to the optimizer's lr:
