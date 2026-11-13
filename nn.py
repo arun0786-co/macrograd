@@ -1,12 +1,10 @@
 import json
 import random
 try:
-    from .engine import tensor
-    from .optim import PI, _cos
+    from .engine import PI, tensor
 except ImportError:
     # run as a script from this folder, not imported as a package
-    from engine import tensor
-    from optim import PI, _cos
+    from engine import PI, tensor
 
 class module:
     def __init__(self):
@@ -300,12 +298,6 @@ def sample(logits, temperature=1.0, top_k=None, top_p=None, rng=None):
     return picks if len(logits.shape) == 2 else picks[0]
 
 
-def _cos_any(x):
-    # optim's _cos is a Taylor series, which gets less accurate further from 0. cos repeats
-    # every 2 pi, so take x mod 2 pi first. on [0, 2 pi] the 20 terms are accurate to about 2e-14
-    return _cos(x % (2 * PI))
-
-
 def sinusoidal_positions(length, dim, base=10000.0):
     # a fixed (length, dim) table with one row per position, to add to the token vectors
     # instead of a learned position embedding (Vaswani et al., 2017). the columns come in
@@ -333,7 +325,7 @@ def sinusoidal_positions(length, dim, base=10000.0):
         row = []
         for w in speeds:
             # sin(x) = cos(x - pi/2)
-            row += [_cos_any(p * w - PI / 2), _cos_any(p * w)]
+            row += [tensor._taylor_cos(p * w - PI / 2), tensor._taylor_cos(p * w)]
         rows.append(row)
     return tensor(rows)
 

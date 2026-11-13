@@ -108,6 +108,7 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 - `.cumsum(axis)` keeps a running total along an axis, so `[1, 2, 3]` becomes `[1, 3, 6]`. The shape stays the same, and the last value along the axis is the sum.
 - Shapes: `.reshape()` (one dim can be `-1`), `.transpose(dim0, dim1)` (the last two dims by default), `.flatten(start_dim)`, `concat(tensors, axis)` and `stack(tensors, axis)`, which joins same-shape tensors along a new axis. Indexing takes ints, slices and lists of ints: `x[0]`, `x[:, 1:3]`, `x[[2, 0]]`.
 - Activations: `relu`, `leaky_relu`, `sigmoid`, `tanh`, `gelu` (the tanh approximation), `silu` (`x * sigmoid(x)`, also called swish), and `softmax` and `log_softmax` over each row.
+- `.sin()` and `.cos()` work on every value, from a Taylor series after taking the angle mod 2 pi. The grad of sin is cos and the grad of cos is -sin. The cosine lr schedule and `sinusoidal_positions` use the same series.
 - `.clamp(min, max)` limits every value to a range. Either bound can be `None`, so `.clamp(min=0)` is relu. Values that got cut off get no gradient.
 - `where(condition, a, b)` takes each value from `a` where the condition is true and from `b` elsewhere. All three broadcast, and `a` or `b` can be a number, like `where(mask, scores, float("-inf"))`. Each grad goes to the side that was picked.
 - `.layer_norm(eps)` moves each row to mean 0 and variance 1, as one node with a handwritten backward.
