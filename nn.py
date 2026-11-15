@@ -232,7 +232,7 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     return scores.softmax() @ v
 
 
-def rotary_embedding(x, base=10000.0):
+def rotary_embedding(x, base=10000.0, start=0):
     # rotary position embedding (Su et al., 2021), for queries or keys of shape (..., T, d).
     # instead of adding a position vector to the input, it turns each pair of features at
     # position p by the angle p * w_i, with the same speeds w_i = 1 / base^(2i / d) as
@@ -245,16 +245,23 @@ def rotary_embedding(x, base=10000.0):
     # tokens are, and the input needs no position embedding. there is nothing to learn.
     # it's x * cos + swap(x) * sin, where swap trades the two features of every pair and the
     # signs are folded into sin, so backward comes from *, + and indexing. it turns each
-    # pair's grad back by the same angle
+    # pair's grad back by the same angle.
+    # the T rows are positions start..start + T - 1. when generating with cached keys, the
+    # new tokens start where the cache ends
     if len(x.shape) < 2:
         raise ValueError(f"rotary_embedding needs shape (..., T, d), got {x.shape}")
     T, d = x.shape[-2:]
     if d % 2:
         raise ValueError(f"rotary_embedding needs an even last dim, since features are turned in pairs, got {d}")
-    # pe[p, 2i] = sin(p w_i) and pe[p, 2i + 1] = cos(p w_i). spread each over both features of its pair
-    pe = sinusoidal_positions(T, d, base).data
-    cos = tensor([[pe[p * d + 2 * (j // 2) + 1] for j in range(d)] for p in range(T)])
-    sin = tensor([[(1.0 if j % 2 else -1.0) * pe[p * d + 2 * (j // 2)] for j in range(d)] for p in range(T)])
+    if not base > 1:
+        raise ValueError(f"base must be > 1, got {base}")
+    if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+        raise ValueError(f"start must be an int >= 0, got {start!r}")
+    # the angle of each feature, the same for both features of a pair, with sin(a) = cos(a - pi/2)
+    speeds = [base ** (-2 * (j // 2) / d) for j in range(d)]
+    positions = range(start, start + T)
+    cos = tensor([[tensor._taylor_cos(p * w) for w in speeds] for p in positions])
+    sin = tensor([[(1.0 if j % 2 else -1.0) * tensor._taylor_cos(p * w - PI / 2) for j, w in enumerate(speeds)] for p in positions])
     swap = [j + 1 if j % 2 == 0 else j - 1 for j in range(d)]
     # (..., T, d) * (T, d): every batch and head gets the same angles
     return x * cos + x[(slice(None),) * (len(x.shape) - 1) + (swap,)] * sin

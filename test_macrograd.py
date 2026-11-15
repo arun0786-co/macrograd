@@ -1976,6 +1976,18 @@ def test_rotary_embedding():
     r = rand_shape(2, 2, 4, 6)
     gradcheck(lambda a, b, c: (scaled_dot_product_attention(rotary_embedding(a), rotary_embedding(b), c, causal=True) * r).sum(), q, k, v)
 
+    # start: rows start.. of a longer run give the same as turning them on their own from start
+    x = rand_shape(2, 9, 6)
+    full = rotary_embedding(x)
+    for start, T in [(0, 9), (4, 5), (8, 1), (3, 2)]:
+        part = rotary_embedding(x[:, start:start + T], start=start)
+        assert part.data == full[:, start:start + T].data
+    assert rotary_embedding(x, start=1000).data != full.data
+    r = rand_shape(2, 9, 6)
+    gradcheck(lambda t: (rotary_embedding(t, start=7) * r).sum(), x)
+    for bad in [-1, 2.0, True]:
+        assert raises_with(lambda: rotary_embedding(x, start=bad), ValueError, "start")
+
     assert raises_with(lambda: rotary_embedding(rand_shape(4)), ValueError, "(..., T, d)")
     assert raises_with(lambda: rotary_embedding(rand_shape(3, 5)), ValueError, "rotary_embedding needs an even")
     assert raises_with(lambda: rotary_embedding(rand_shape(3, 4), base=1.0), ValueError, "base")
