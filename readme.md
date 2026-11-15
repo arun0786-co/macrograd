@@ -51,6 +51,8 @@ And speme, ank hothe the fou.
 
 It has the layout of a play, with speaker names in capitals, colons and short lines, and some real words like "thy", "hand" and "that", but most of the words are made up.
 
+The GPT runs its whole 16-character window again for every character it writes. With `POSITIONS = "rope"` (see below), `generate` keeps each block's keys and values in a cache instead and only runs the newest character, with the cache cut to the 15 characters before it, so each character still sees the same window. For a trained model with rope, rms norm and swiglu, that writes the same 300 characters in 0.9 seconds instead of 10.6.
+
 `train_lstm.py` trains an LSTM on the same text, set up like the GPT: the same 16-character windows in the same order, the same held-out windows, optimizer, lr schedule and number of steps, and nearly the same size. It has 32 numbers per character, an `lstm_cell` with a hidden size of 42 and a linear layer, 17,475 parameters in all. 1500 steps take about 12 minutes.
 
 | | GPT | LSTM |
