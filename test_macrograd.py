@@ -8,7 +8,7 @@ import weakref
 
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
-from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions
+from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions, rotary_embedding
 from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup
 from data import batches
 
@@ -1769,6 +1769,58 @@ def test_sinusoidal_positions():
     assert raises_with(lambda: sinusoidal_positions(3, 0), ValueError, "dim")
     assert raises_with(lambda: sinusoidal_positions(3, 5), ValueError, "even")
     assert raises_with(lambda: sinusoidal_positions(3, 4, base=1.0), ValueError, "base")
+
+
+def test_rotary_embedding():
+    def ref(x, base):
+        # straight from the formula, with math.cos and math.sin
+        T, d = x.shape[-2:]
+        out = []
+        for r in range(len(x.data) // d):
+            row, p = x.data[r * d:(r + 1) * d], r % T
+            for i in range(d // 2):
+                a = p / base ** (2 * i / d)
+                out += [row[2 * i] * math.cos(a) - row[2 * i + 1] * math.sin(a),
+                        row[2 * i] * math.sin(a) + row[2 * i + 1] * math.cos(a)]
+        return out
+
+    random.seed(28)
+    for shape, base in [((5, 4), 10000.0), ((2, 6, 8), 10000.0), ((2, 3, 5, 6), 100.0), ((1, 30, 2), 10.0)]:
+        x = rand_shape(*shape)
+        out = rotary_embedding(x, base)
+        assert out.shape == x.shape
+        assert all(close(a, b, abs_tol=1e-12) for a, b in zip(out.data, ref(x, base)))
+        r = rand_shape(*shape)
+        gradcheck(lambda t: (rotary_embedding(t, base) * r).sum(), x)
+
+    # position 0 isn't turned, and every pair keeps its length
+    x = rand_shape(2, 7, 6)
+    out = rotary_embedding(x)
+    for b in range(2):
+        assert all(close(u, v, abs_tol=1e-15) for u, v in zip(out[b, 0].data, x[b, 0].data))
+    def pair_lengths(t):
+        return [t.data[k] ** 2 + t.data[k + 1] ** 2 for k in range(0, len(t.data), 2)]
+    assert all(close(u, v) for u, v in zip(pair_lengths(out), pair_lengths(x)))
+
+    # the same query and the same key at every position: once both are turned, the score
+    # between positions m and n only depends on m - n, and it does change with m - n
+    T = 6
+    q = rotary_embedding(tensor([rand_shape(8).data] * T))
+    k = rotary_embedding(tensor([rand_shape(8).data] * T))
+    scores = q @ k.transpose()
+    for m in range(T - 1):
+        for n in range(T - 1):
+            assert close(scores.get_element(m + 1, n + 1), scores.get_element(m, n), abs_tol=1e-12)
+    assert not close(scores.get_element(0, 0), scores.get_element(3, 0))
+
+    # in attention, on (B, heads, T, head_dim) queries and keys
+    q, k, v = rand_shape(2, 2, 4, 6), rand_shape(2, 2, 4, 6), rand_shape(2, 2, 4, 6)
+    r = rand_shape(2, 2, 4, 6)
+    gradcheck(lambda a, b, c: (scaled_dot_product_attention(rotary_embedding(a), rotary_embedding(b), c, causal=True) * r).sum(), q, k, v)
+
+    assert raises_with(lambda: rotary_embedding(rand_shape(4)), ValueError, "(..., T, d)")
+    assert raises_with(lambda: rotary_embedding(rand_shape(3, 5)), ValueError, "rotary_embedding needs an even")
+    assert raises_with(lambda: rotary_embedding(rand_shape(3, 4), base=1.0), ValueError, "base")
 
 
 def test_xavier_and_kaiming_init():

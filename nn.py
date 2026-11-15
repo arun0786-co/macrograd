@@ -228,6 +228,34 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     return scores.softmax() @ v
 
 
+def rotary_embedding(x, base=10000.0):
+    # rotary position embedding (Su et al., 2021), for queries or keys of shape (..., T, d).
+    # instead of adding a position vector to the input, it turns each pair of features at
+    # position p by the angle p * w_i, with the same speeds w_i = 1 / base^(2i / d) as
+    # sinusoidal_positions:
+    #   out[2i]     = x[2i] * cos(p w_i) - x[2i + 1] * sin(p w_i)
+    #   out[2i + 1] = x[2i] * sin(p w_i) + x[2i + 1] * cos(p w_i)
+    # a dot product of two pairs turned by angles a and b only depends on a - b, so once q
+    # and k are both turned, the score between a query at position m and a key at position
+    # n depends on m - n and not on where the two are. attention then sees how far apart
+    # tokens are, and the input needs no position embedding. there is nothing to learn.
+    # it's x * cos + swap(x) * sin, where swap trades the two features of every pair and the
+    # signs are folded into sin, so backward comes from *, + and indexing. it turns each
+    # pair's grad back by the same angle
+    if len(x.shape) < 2:
+        raise ValueError(f"rotary_embedding needs shape (..., T, d), got {x.shape}")
+    T, d = x.shape[-2:]
+    if d % 2:
+        raise ValueError(f"rotary_embedding needs an even last dim, since features are turned in pairs, got {d}")
+    # pe[p, 2i] = sin(p w_i) and pe[p, 2i + 1] = cos(p w_i). spread each over both features of its pair
+    pe = sinusoidal_positions(T, d, base).data
+    cos = tensor([[pe[p * d + 2 * (j // 2) + 1] for j in range(d)] for p in range(T)])
+    sin = tensor([[(1.0 if j % 2 else -1.0) * pe[p * d + 2 * (j // 2)] for j in range(d)] for p in range(T)])
+    swap = [j + 1 if j % 2 == 0 else j - 1 for j in range(d)]
+    # (..., T, d) * (T, d): every batch and head gets the same angles
+    return x * cos + x[(slice(None),) * (len(x.shape) - 1) + (swap,)] * sin
+
+
 def sample(logits, temperature=1.0, top_k=None, top_p=None, rng=None):
     # picks ids from a model's output scores, for generating text one token at a time.
     # logits is (V,) for one pick or (B, V) for one pick per row; returns an int, or a
