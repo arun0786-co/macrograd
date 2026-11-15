@@ -164,6 +164,8 @@ Layers subclass `module`. `.parameters()` finds every tensor a module stores, in
 
 `batches(x, y, batch_size, shuffle=True)` splits a dataset into mini-batches of rows, in a new random order each time. `y` can be a tensor or a list of integer labels.
 
+`bpe(text, vocab_size)` learns a byte-pair encoding tokenizer from text. It starts from the 256 byte values and keeps joining the most common pair of neighbouring tokens into a new one until it has `vocab_size` tokens. `.encode(text)` gives a list of ids and `.decode(ids)` gives the text back, including characters the training text never had. Learning 256 merges from the first 100,000 characters of tiny Shakespeare takes about 4 seconds, and held-out text then takes 1.84 characters per token. Common pieces like `th`, `ou` and `you` become single tokens, and so do speaker names like `MENENIUS:\n`.
+
 ### visualize.py
 
 Every tensor keeps the tensors it came from (`_prev`) and the op that made it (`_op`). `draw_dot(loss)` walks back from `loss` and returns a Graphviz graph with an oval for each op and a box for each tensor, showing the first two values of its data and gradient.
