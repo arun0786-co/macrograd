@@ -640,12 +640,19 @@ class multi_head_attention(module):
     #   2. each is cut into heads: (B, T, dim) -> (B, T, heads, head_dim) -> (B, heads, T, head_dim)
     #   3. scaled dot-product attention runs in every head at once, heads acting like a batch dim
     #   4. the heads go back side by side, (B, T, dim), and a last linear layer mixes them
-    # it is self-attention: the queries, keys and values all come from the same x
-    def __init__(self, dim, num_heads):
+    # it is self-attention: the queries, keys and values all come from the same x.
+    # rope=True turns every head's queries and keys with rotary_embedding after step 2, so
+    # the scores see how far apart two positions are without any position embedding
+    def __init__(self, dim, num_heads, rope=False):
         super().__init__()
         if num_heads < 1 or dim % num_heads != 0:
             raise ValueError(f"dim {dim} must split evenly into num_heads {num_heads}")
+        if not isinstance(rope, bool):
+            raise ValueError(f"rope must be True or False, got {rope!r}")
+        if rope and (dim // num_heads) % 2:
+            raise ValueError(f"rope turns features in pairs, so the head size dim // num_heads must be even, got {dim // num_heads}")
         self.num_heads = num_heads
+        self.rope = rope
         self.q_proj = linear(dim, dim)
         self.k_proj = linear(dim, dim)
         self.v_proj = linear(dim, dim)
@@ -664,11 +671,14 @@ class multi_head_attention(module):
         q = split_heads(self.q_proj(x))
         k = split_heads(self.k_proj(x))
         v = split_heads(self.v_proj(x))
+        if self.rope:
+            q, k = rotary_embedding(q), rotary_embedding(k)
         out = scaled_dot_product_attention(q, k, v, causal)
         return self.out_proj(out.transpose(1, 2).reshape(B, T, dim))
 
     def __repr__(self):
-        return f"MultiHeadAttention(dim={self.q_proj.w.shape[0]}, num_heads={self.num_heads})"
+        rope = ", rope=True" if self.rope else ""
+        return f"MultiHeadAttention(dim={self.q_proj.w.shape[0]}, num_heads={self.num_heads}{rope})"
 
 
 class swiglu(module):
