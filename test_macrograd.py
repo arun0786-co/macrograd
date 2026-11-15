@@ -2802,6 +2802,57 @@ def test_transformer_block():
     assert raises(lambda: small(rand_shape(3, 4)), ValueError)
     assert raises(lambda: small(rand_shape(2, 3, 5)), ValueError)
 
+    # the LLaMA-style options: rms_norm, swiglu and rope, each against a reference by hand
+    llama = transformer_block(8, num_heads=2, hidden=10, norm="rms", mlp="swiglu", rope=True)
+    assert [name for name, _ in llama.named_parameters()] == (
+        ["ln1.gamma"]
+        + [f"attn.{proj}.{p}" for proj in ["q_proj", "k_proj", "v_proj", "out_proj"] for p in ["w", "b"]]
+        + ["ln2.gamma"]
+        + [f"mlp.{proj}.{p}" for proj in ["gate", "up", "down"] for p in ["w", "b"]])
+    assert repr(llama) == "TransformerBlock(dim=8, num_heads=2, hidden=10, norm='rms', mlp='swiglu', rope=True)"
+    assert repr(transformer_block(8, 2, rope=True)) == "TransformerBlock(dim=8, num_heads=2, hidden=32, rope=True)"
+    assert repr(transformer_block(8, 2)) == "TransformerBlock(dim=8, num_heads=2, hidden=32)"
+    assert transformer_block(12, 2, mlp="swiglu").mlp.gate.w.shape == (12, 32)
+    for p in llama.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+
+    def ref_rms(norm, rows):
+        return [[v / math.sqrt(math.fsum(u * u for u in r) / len(r) + norm.eps) * norm.gamma.data[j]
+                 for j, v in enumerate(r)] for r in rows]
+
+    def ref_llama(rows, causal):
+        rows = add(rows, ref_mha(llama.attn, ref_rms(llama.ln1, rows), causal))
+        h = ref_rms(llama.ln2, rows)
+        g, u = ref_project(llama.mlp.gate, h), ref_project(llama.mlp.up, h)
+        gated = [[a / (1 + math.exp(-a)) * c for a, c in zip(gr, ur)] for gr, ur in zip(g, u)]
+        return add(rows, ref_project(llama.mlp.down, gated))
+
+    x = rand_shape(2, 5, 8)
+    for causal in [False, True]:
+        out = llama(x, causal=causal)
+        for b in range(2):
+            rows = [[x.get_element(b, t, c) for c in range(8)] for t in range(5)]
+            expected = ref_llama(rows, causal)
+            assert all(close(out.get_element(b, t, c), expected[t][c], abs_tol=1e-12) for t in range(5) for c in range(8))
+    later = tensor(x.data[:], shape=x.shape)
+    later.data[-1] += 1.0
+    assert llama(later, causal=True)[:, :4].data == llama(x, causal=True)[:, :4].data
+
+    small = transformer_block(4, num_heads=2, hidden=6, norm="rms", mlp="swiglu", rope=True)
+    for p in small.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+    x, y = rand_shape(2, 3, 4), rand_shape(2, 3, 4)
+    gradcheck(lambda a, *params: small(a, True).mse_loss(y), x, *small.parameters())
+    # each option also works on its own
+    for kwargs in [{"norm": "rms"}, {"mlp": "swiglu"}, {"rope": True}]:
+        block = transformer_block(4, num_heads=2, **kwargs)
+        assert block(x, causal=True).shape == (2, 3, 4)
+
+    assert raises_with(lambda: transformer_block(4, 2, norm="batch"), ValueError, "norm")
+    assert raises_with(lambda: transformer_block(4, 2, mlp="relu"), ValueError, "mlp")
+    assert raises_with(lambda: transformer_block(4, 2, mlp="swiglu", hidden=0), ValueError, "hidden")
+    assert raises_with(lambda: transformer_block(6, 2, rope=True), ValueError, "even")
+
 
 def ref_sample(row, temperature, top_k, rng, top_p=None):
     # math.exp weights that aren't normalized, and u scaled up to their total instead
