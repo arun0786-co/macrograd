@@ -7,7 +7,7 @@ import tempfile
 import weakref
 
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
-from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, transformer_block
+from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, swiglu, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions, rotary_embedding
 from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup
 from data import batches
@@ -2474,6 +2474,48 @@ def test_multi_head_attention():
     assert raises(lambda: multi_head_attention(6, num_heads=4), ValueError)
     assert raises(lambda: small(rand_shape(3, 4)), ValueError)
     assert raises(lambda: small(rand_shape(2, 3, 5)), ValueError)
+
+
+def test_swiglu():
+    random.seed(29)
+    layer = swiglu(4, hidden=6)
+    assert [name for name, _ in layer.named_parameters()] == ["gate.w", "gate.b", "up.w", "up.b", "down.w", "down.b"]
+    assert layer.gate.w.shape == layer.up.w.shape == (4, 6) and layer.down.w.shape == (6, 4)
+    assert repr(layer) == "SwiGLU(dim=4, hidden=6)"
+    for p in layer.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+
+    # against the formula, one row at a time with math.exp
+    x = rand_shape(2, 3, 4)
+    out = layer(x)
+    assert out.shape == (2, 3, 4)
+    def project(lin, row):
+        n_out = lin.w.shape[1]
+        return [math.fsum(row[i] * lin.w.data[i * n_out + j] for i in range(len(row))) + lin.b.data[j] for j in range(n_out)]
+    expected = []
+    for r in range(6):
+        row = x.data[r * 4:(r + 1) * 4]
+        g, u = project(layer.gate, row), project(layer.up, row)
+        expected += project(layer.down, [a / (1 + math.exp(-a)) * b for a, b in zip(g, u)])
+    assert all(close(a, b) for a, b in zip(out.data, expected))
+
+    r = rand_shape(2, 3, 4)
+    gradcheck(lambda t: (layer(t) * r).sum(), x)
+    gradcheck(lambda *params: (layer(x) * r).sum(), *layer.parameters())
+
+    # where the gate is shut, silu(gate) = 0 and only down's bias comes out
+    layer.gate.w.data = [0.0] * 24
+    layer.gate.b.data = [-1000.0] * 6
+    assert all(close(a, b, abs_tol=1e-12) for a, b in zip(layer(x).data, layer.down.b.data * 6))
+
+    # the default hidden size gives about as many weights as the gelu MLP in transformer_block
+    def count(m):
+        return sum(len(p.data) for p in m.parameters())
+    ff, block = swiglu(32), transformer_block(32, 4)
+    assert ff.gate.w.shape == (32, 85) and abs(count(ff) - count(block.mlp)) < 0.01 * count(block.mlp)
+
+    for bad in [0, -3, 2.5, True]:
+        assert raises_with(lambda: swiglu(4, hidden=bad), ValueError, "hidden")
 
 
 def ref_layer_norm(ln, rows):
