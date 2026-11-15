@@ -69,7 +69,12 @@ class char_gpt(module):
         self.ln = layer_norm(dim) if norm == "layer" else rms_norm(dim)
         self.head = linear(dim, vocab_size)
 
-    def __call__(self, ids):
+    def __call__(self, ids, caches=None):
+        # caches holds one dict per block for generating with cached keys and values (see
+        # multi_head_attention). only with positions="rope", since the other two add the
+        # position to x and the new tokens' positions would have to be counted here
+        if caches is not None and self.positions != "rope":
+            raise ValueError("caches need positions='rope'")
         T = len(ids[0])
         x = self.tok(tensor(ids))
         # (B, T, dim) + (T, dim): every sequence in the batch gets the same positions
@@ -77,8 +82,8 @@ class char_gpt(module):
             x = x + self.pos(tensor(list(range(T))))
         elif self.positions == "sinusoidal":
             x = x + sinusoidal_positions(T, self.dim)
-        for block in self.blocks:
-            x = block(x, causal=True)
+        for i, block in enumerate(self.blocks):
+            x = block(x, True, None if caches is None else caches[i])
         return self.head(self.ln(x))
 
 
@@ -101,14 +106,28 @@ def evaluate(model, batches):
         return sum(loss_on(model, x, y).data[0] for x, y in batches) / len(batches)
 
 
-def generate(model, ids, length, temperature=0.8, top_k=None):
+def generate(model, ids, length, temperature=0.8, top_k=None, use_cache=True):
     ids = list(ids)
     with no_grad():
+        if model.positions != "rope" or not use_cache:
+            for _ in range(length):
+                # only the last CONTEXT characters fit, and only the scores at the last
+                # position are about the character that comes next
+                scores = model([ids[-model.context:]])[:, -1]
+                ids.append(sample(scores, temperature, top_k)[0])
+            return ids
+        # with rope: read the prompt once, then run only the newest character each step.
+        # each block keeps the keys and values of the CONTEXT - 1 characters before it, so
+        # every character sees the same 16-character window as above. with one layer that's
+        # exactly the same computation; with more, a later layer's cached keys came from
+        # earlier windows, so it would only be close
+        caches = [{} for _ in model.blocks]
+        scores = model([ids[-model.context:]], caches)[:, -1]
         for _ in range(length):
-            # only the last CONTEXT characters fit, and only the scores at the last position
-            # are about the character that comes next
-            scores = model([ids[-model.context:]])[:, -1]
             ids.append(sample(scores, temperature, top_k)[0])
+            for cache in caches:
+                cache["k"], cache["v"] = cache["k"][:, :, 1 - model.context:], cache["v"][:, :, 1 - model.context:]
+            scores = model([ids[-1:]], caches)[:, -1]
     return ids
 
 
