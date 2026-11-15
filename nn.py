@@ -207,7 +207,10 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     # causal=True lets position i look only at positions 0..i, for models that predict the
     # next token and must not see it: the scores for later positions get -inf added, so
     # softmax gives them weight exactly 0. position i can always see itself, so no row is
-    # left with nothing to attend to.
+    # left with nothing to attend to. there can be fewer queries than keys: then the queries
+    # are the last T_q positions, so query i is at position T_k - T_q + i and sees keys up to
+    # there. that's the case when generating with cached keys, where one new query looks at
+    # every earlier key.
     # built from matmul, transpose, softmax and +, so backward comes from those ops
     if len(q.shape) < 2 or len(k.shape) < 2 or len(v.shape) < 2:
         raise ValueError(f"attention needs q, k, v with at least 2 dims, got {q.shape}, {k.shape}, {v.shape}")
@@ -219,11 +222,12 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     d = q.shape[-1]
     scores = (q @ k.transpose()) * (d ** -0.5)
     if causal:
-        T = q.shape[-2]
-        if k.shape[-2] != T:
-            raise ValueError(f"causal attention needs as many queries as keys, got {T} and {k.shape[-2]}")
-        # (T, T), broadcast over the leading dims
-        mask = tensor([[float("-inf") if j > i else 0.0 for j in range(T)] for i in range(T)])
+        T_q, T_k = q.shape[-2], k.shape[-2]
+        if T_q > T_k:
+            raise ValueError(f"causal attention needs at most as many queries as keys, got {T_q} and {T_k}")
+        # (T_q, T_k), broadcast over the leading dims
+        shift = T_k - T_q
+        mask = tensor([[float("-inf") if j > shift + i else 0.0 for j in range(T_k)] for i in range(T_q)])
         scores = scores + mask
     return scores.softmax() @ v
 

@@ -2487,7 +2487,8 @@ def ref_attention(q, k, v, causal):
     T_k, d_v = v.shape
     out = []
     for i in range(T_q):
-        visible = range(i + 1) if causal else range(T_k)
+        # with fewer queries than keys, the queries are the last T_q positions
+        visible = range(T_k - T_q + i + 1) if causal else range(T_k)
         scores = [math.fsum(q.get_element(i, c) * k.get_element(j, c) for c in range(d)) / math.sqrt(d)
                   for j in visible]
         top = max(scores)
@@ -2546,10 +2547,19 @@ def test_scaled_dot_product_attention():
         r = rand_shape(2, 2, 4, 2)
         gradcheck(lambda a, b, c: (scaled_dot_product_attention(a, b, c, causal=causal) * r).sum(), q, k, v)
 
+    # causal with fewer queries than keys: the queries are the last positions, so they give
+    # the same rows as the end of a full causal pass. that's what generating with cached keys needs
     q, k, v = rand_shape(3, 4), rand_shape(5, 4), rand_shape(5, 2)
+    out = scaled_dot_product_attention(q, k, v, causal=True)
+    assert all(close(a, b) for a, b in zip(out.data, ref_attention(q, k, v, True)))
+    full_q = concat([rand_shape(2, 4), q])
+    assert all(close(a, b) for a, b in zip(out.data, scaled_dot_product_attention(full_q, k, v, causal=True)[2:].data))
+    assert scaled_dot_product_attention(q[2:], k, v, causal=True).data == scaled_dot_product_attention(q[2:], k, v).data
+    r = rand_shape(3, 2)
+    gradcheck(lambda a, b, c: (scaled_dot_product_attention(a, b, c, causal=True) * r).sum(), q, k, v)
     assert raises(lambda: scaled_dot_product_attention(q, rand_shape(5, 3), v), ValueError)
     assert raises(lambda: scaled_dot_product_attention(q, k, rand_shape(4, 2)), ValueError)
-    assert raises(lambda: scaled_dot_product_attention(q, k, v, causal=True), ValueError)
+    assert raises_with(lambda: scaled_dot_product_attention(k, q, rand_shape(3, 2), causal=True), ValueError, "at most as many queries")
     assert raises(lambda: scaled_dot_product_attention(rand_shape(2, 3, 4), rand_shape(1, 3, 4), rand_shape(1, 3, 4)), ValueError)
 
 
