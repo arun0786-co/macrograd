@@ -1,10 +1,10 @@
 import json
 import random
 try:
-    from .engine import PI, tensor
+    from .engine import PI, tensor, concat
 except ImportError:
     # run as a script from this folder, not imported as a package
-    from engine import PI, tensor
+    from engine import PI, tensor, concat
 
 class module:
     def __init__(self):
@@ -669,12 +669,22 @@ class multi_head_attention(module):
         self.v_proj = linear(dim, dim)
         self.out_proj = linear(dim, dim)
 
-    def __call__(self, x, causal=False):
+    def __call__(self, x, causal=False, cache=None):
+        # cache is a dict that keeps this layer's keys and values between calls, for generating
+        # a few tokens at a time: the new keys and values are added after the cached ones and
+        # the new queries attend to all of them, so earlier tokens never go through the layer
+        # again. their outputs don't change, since with causal=True a token never sees later
+        # ones. cache["seen"] counts the positions so far, so rope turns new tokens by their
+        # real positions. cutting cache["k"] and cache["v"] down to the last n positions makes
+        # a sliding window, and "seen" keeps counting
         dim = self.q_proj.w.shape[0]
         if len(x.shape) != 3 or x.shape[2] != dim:
             raise ValueError(f"multi_head_attention expects shape (B, T, {dim}), got {x.shape}")
+        if cache is not None and not isinstance(cache, dict):
+            raise ValueError(f"cache must be a dict, got {type(cache).__name__}")
         B, T, _ = x.shape
         H = self.num_heads
+        start = 0 if cache is None else cache.get("seen", 0)
 
         def split_heads(t):
             return t.reshape(B, T, H, dim // H).transpose(1, 2)
@@ -683,7 +693,13 @@ class multi_head_attention(module):
         k = split_heads(self.k_proj(x))
         v = split_heads(self.v_proj(x))
         if self.rope:
-            q, k = rotary_embedding(q), rotary_embedding(k)
+            q, k = rotary_embedding(q, start=start), rotary_embedding(k, start=start)
+        if cache is not None:
+            if "k" in cache:
+                # (B, H, cached, head_dim) and (B, H, T, head_dim) joined along positions
+                k = concat([cache["k"], k], axis=2)
+                v = concat([cache["v"], v], axis=2)
+            cache["k"], cache["v"], cache["seen"] = k, v, start + T
         out = scaled_dot_product_attention(q, k, v, causal)
         return self.out_proj(out.transpose(1, 2).reshape(B, T, dim))
 
@@ -750,8 +766,9 @@ class transformer_block(module):
         else:
             self.mlp = swiglu(dim, hidden)
 
-    def __call__(self, x, causal=False):
-        x = x + self.attn(self.ln1(x), causal)
+    def __call__(self, x, causal=False, cache=None):
+        # cache goes to the attention, see multi_head_attention
+        x = x + self.attn(self.ln1(x), causal, cache)
         return x + self.mlp(self.ln2(x))
 
     def __repr__(self):

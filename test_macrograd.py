@@ -2876,6 +2876,47 @@ def test_transformer_block():
     assert raises_with(lambda: transformer_block(6, 2, rope=True), ValueError, "even")
 
 
+def test_kv_cache():
+    random.seed(34)
+    def close_all(a, b):
+        return len(a.data) == len(b.data) and all(close(u, v, abs_tol=1e-12) for u, v in zip(a.data, b.data))
+
+    # feeding a sequence in pieces with a cache gives the same rows as one causal pass,
+    # with and without rope, for attention and for whole blocks
+    x = rand_shape(2, 7, 8)
+    layers = [multi_head_attention(8, 2), multi_head_attention(8, 2, rope=True),
+              transformer_block(8, 2, norm="rms", mlp="swiglu", rope=True)]
+    for layer in layers:
+        full = layer(x, causal=True)
+        cache = {}
+        pieces = [layer(x[:, a:b], True, cache) for a, b in [(0, 3), (3, 4), (4, 7)]]
+        assert close_all(concat(pieces, axis=1), full)
+        attn = layer.attn if isinstance(layer, transformer_block) else layer
+        assert cache["seen"] == 7 and cache["k"].shape == cache["v"].shape == (2, 2, 7, 4)
+        # gradients flow through the cached keys and values too
+        r = rand_shape(2, 7, 8)
+        def in_pieces(a):
+            c = {}
+            return (concat([layer(a[:, :3], True, c), layer(a[:, 3:], True, c)], axis=1) * r).sum()
+        gradcheck(in_pieces, x)
+
+    # cutting the cache to the last 3 positions gives a sliding window of 4: each new token's
+    # output is the last row of a fresh pass over its 4-token window. with rope that works
+    # because the scores only depend on how far apart tokens are, and "seen" keeps the real
+    # positions. without rope there are no positions inside attention at all; a model with
+    # learned positions would have to add the right ones itself
+    for layer in [layers[0], layers[2]]:
+        cache = {}
+        for t in range(7):
+            out = layer(x[:, t:t + 1], True, cache)
+            cache["k"], cache["v"] = cache["k"][:, :, -3:], cache["v"][:, :, -3:]
+            window = layer(x[:, max(0, t - 3):t + 1], causal=True)
+            assert close_all(out, window[:, -1:])
+        assert cache["seen"] == 7
+
+    assert raises_with(lambda: layers[0](x, True, cache=[]), ValueError, "cache must be a dict")
+
+
 def ref_sample(row, temperature, top_k, rng, top_p=None):
     # math.exp weights that aren't normalized, and u scaled up to their total instead
     V = len(row)
