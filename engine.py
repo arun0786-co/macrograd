@@ -1257,6 +1257,40 @@ class tensor:
         out._backward = _backward
         return out
     
+    def kl_div(self, target):
+        # Kullback-Leibler divergence KL(p || q): how far the model's distribution q is from a
+        # target distribution p. self holds log q, one row per example (usually from
+        # log_softmax), and target holds p, probabilities that add up to 1 in each row:
+        #   loss = (1/rows) * sum over rows and classes of p * (log p - log q)
+        # it's 0 when q = p and positive otherwise. it equals cross entropy against p minus
+        # the entropy of p, and the entropy doesn't depend on the model, so the grad is the
+        # same as cross entropy's, -p/rows for each log q, but the loss reaches 0 at the best
+        # fit. it isn't symmetric: KL(p || q) and KL(q || p) differ.
+        # a class with p = 0 adds 0 (p log p goes to 0 as p does), even where log q is -inf.
+        # the target gets no grad. used for distillation (Hinton et al., 2015), where a small
+        # model learns to match a bigger one's whole output distribution instead of only the labels
+        if self.shape != target.shape:
+            raise ValueError(f"Shape mismatch in kl_div: {self.shape} vs {target.shape}")
+        C = self.shape[-1] if self.shape else 1
+        rows = len(self.data) // C
+        for start in range(0, len(target.data), C):
+            row = target.data[start:start + C]
+            if min(row) < 0 or abs(sum(row) - 1) > 1e-6:
+                raise ValueError(f"kl_div needs target rows of probabilities that add up to 1, got {row}")
+
+        total = 0.0
+        for lq, p in zip(self.data, target.data):
+            if p > 0:
+                total += p * (self._taylor_log(p) - lq)
+        out = tensor([total / rows], shape=(), children=(self, target), op='kl_div')
+
+        def _backward():
+            for i, p in enumerate(target.data):
+                self.grad[i] -= p * out.grad[0] / rows
+
+        out._backward = _backward
+        return out
+
     def binary_cross_entropy_with_logits(self, target):
         # for yes/no outputs: self holds raw scores (logits), target holds 0 or 1 (or a
         # probability) for each one, and the sigmoid happens inside. per value,

@@ -1013,6 +1013,63 @@ def test_huber_loss():
         assert raises_with(lambda: tensor([1.0]).huber_loss(tensor([0.0]), delta=bad), ValueError, "delta")
 
 
+def test_kl_div():
+    def ref(logits, targets):
+        total = []
+        for row, t in zip(logits, targets):
+            m = max(row)
+            lse = m + math.log(math.fsum(math.exp(v - m) for v in row))
+            total += [p * (math.log(p) - (v - lse)) for v, p in zip(row, t) if p > 0]
+        return math.fsum(total) / len(logits)
+
+    logits = [[0.3, -0.2, 0.5], [2.0, 0.1, -1.0], [1000.0, 0.0, -1000.0]]
+    targets = [[0.2, 0.5, 0.3], [0.0, 0.25, 0.75], [1.0, 0.0, 0.0]]
+    loss = tensor(logits).log_softmax().kl_div(tensor(targets))
+    assert loss.shape == () and close(loss.data[0], ref(logits, targets))
+    # by hand: q = (0.5, 0.5) against p = (1, 0) is 1 * (log 1 - log 0.5) = log 2
+    assert close(tensor([math.log(0.5)] * 2).kl_div(tensor([1.0, 0.0])).data[0], math.log(2))
+
+    # it's cross entropy against p minus the entropy of p
+    entropy = -math.fsum(p * math.log(p) for row in targets for p in row if p > 0) / 3
+    ce = tensor(logits).cross_entropy_loss(tensor(targets)).data[0]
+    assert close(loss.data[0], ce - entropy)
+
+    # 0 when q = p, with no grad there, and positive otherwise
+    x = tensor([[math.log(p) for p in [0.1, 0.6, 0.3]]])
+    loss = x.log_softmax().kl_div(tensor([[0.1, 0.6, 0.3]]))
+    loss.backward()
+    assert abs(loss.data[0]) < 1e-12 and all(abs(g) < 1e-12 for g in x.grad)
+    random.seed(30)
+    for _ in range(20):
+        z = rand_shape(2, 4, low=-3, high=3)
+        p = rand_shape(2, 4, low=-3, high=3).softmax()
+        assert z.log_softmax().kl_div(p).data[0] > 0
+    # not symmetric
+    p, q = [0.9, 0.1], [0.5, 0.5]
+    p_q = tensor([math.log(v) for v in q]).kl_div(tensor(p)).data[0]
+    q_p = tensor([math.log(v) for v in p]).kl_div(tensor(q)).data[0]
+    assert close(p_q, 0.9 * math.log(1.8) + 0.1 * math.log(0.2)) and close(q_p, 0.5 * math.log(5 / 9) + 0.5 * math.log(5))
+    assert not close(p_q, q_p)
+
+    # each log q gets -p/rows, and the target gets nothing
+    logq, p = tensor([[-1.0, -0.5], [-2.0, -0.2]]), tensor([[0.25, 0.75], [1.0, 0.0]])
+    logq.kl_div(p).backward()
+    assert logq.grad == [-0.125, -0.375, -0.5, 0.0] and p.grad == [0.0] * 4
+    gradcheck(lambda t: t.log_softmax().kl_div(tensor(targets[:2])), tensor(logits[:2]))
+    # one input used twice: the grads add up
+    gradcheck(lambda t: t.kl_div(p) + t.kl_div(tensor([[0.5, 0.5], [0.1, 0.9]])), logq)
+
+    # a class with p = 0 doesn't count even if q gives it 0, but one with p > 0 does
+    inf = float("inf")
+    assert close(tensor([0.0, -inf]).kl_div(tensor([1.0, 0.0])).data[0], 0.0)
+    assert tensor([0.0, -inf]).kl_div(tensor([0.5, 0.5])).data == [inf]
+
+    assert raises_with(lambda: tensor([[0.0, 0.0]]).kl_div(tensor([1.0, 0.0])), ValueError, "Shape mismatch")
+    assert raises_with(lambda: tensor([0.0, 0.0]).kl_div(tensor([1.5, -0.5])), ValueError, "probabilities")
+    assert raises_with(lambda: tensor([0.0, 0.0]).kl_div(tensor([0.5, 0.6])), ValueError, "probabilities")
+    assert raises_with(lambda: tensor([[0.0, 0.0], [0.0, 0.0]]).kl_div(tensor([[0.5, 0.5], [0.2, 0.2]])), ValueError, "probabilities")
+
+
 def test_binary_cross_entropy_with_logits():
     def ref(xs, ts):
         total = 0.0
