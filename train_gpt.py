@@ -9,7 +9,7 @@ import time
 import urllib.request
 
 from engine import tensor, no_grad
-from nn import module, embedding, transformer_block, layer_norm, linear, sample, sinusoidal_positions
+from nn import module, embedding, transformer_block, layer_norm, rms_norm, linear, sample, sinusoidal_positions
 from optim import AdamW, CosineAnnealingLR, LinearWarmup
 
 URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
@@ -23,10 +23,12 @@ HEADS = 4
 LAYERS = 1
 BATCH = 8
 STEPS = 1500
-# three things to try. the defaults are what the numbers in the readme came from
+# things to try. the defaults are what the numbers in the readme came from
 WARMUP = 0              # steps of linear lr warmup before the cosine schedule, 0 for none
-POSITIONS = "learned"   # "learned" position embedding or the fixed "sinusoidal" table
+POSITIONS = "learned"   # "learned" position embedding, the fixed "sinusoidal" table, or "rope" in attention
 LABEL_SMOOTHING = 0.0   # for the training loss only; the val loss is always plain nll
+NORM = "layer"          # "layer" or "rms" norm, in the block and before the output layer
+MLP = "gelu"            # "gelu" MLP or "swiglu" feed-forward in the block
 
 
 def load_text():
@@ -48,29 +50,33 @@ class char_gpt(module):
     #   scores = linear(layer_norm(x))
     # the position embedding is how the model knows the order of the characters, since
     # attention on its own treats its input as a set. positions="sinusoidal" adds the fixed
-    # sin/cos table instead, which has nothing to learn
-    def __init__(self, vocab_size, context, dim, num_heads, num_layers, positions="learned"):
+    # sin/cos table instead, which has nothing to learn, and positions="rope" adds nothing
+    # to x and turns the queries and keys in attention instead.
+    # norm and mlp pick the norm layers and the feed-forward. positions="rope", norm="rms"
+    # and mlp="swiglu" together make it LLaMA-style
+    def __init__(self, vocab_size, context, dim, num_heads, num_layers, positions="learned", norm="layer", mlp="gelu"):
         super().__init__()
-        if positions not in ("learned", "sinusoidal"):
-            raise ValueError(f"positions must be 'learned' or 'sinusoidal', got {positions!r}")
+        if positions not in ("learned", "sinusoidal", "rope"):
+            raise ValueError(f"positions must be 'learned', 'sinusoidal' or 'rope', got {positions!r}")
         self.context = context
         self.dim = dim
         self.positions = positions
         self.tok = embedding(vocab_size, dim)
         if positions == "learned":
             self.pos = embedding(context, dim)
-        self.blocks = [transformer_block(dim, num_heads) for _ in range(num_layers)]
-        self.ln = layer_norm(dim)
+        self.blocks = [transformer_block(dim, num_heads, norm=norm, mlp=mlp, rope=positions == "rope")
+                       for _ in range(num_layers)]
+        self.ln = layer_norm(dim) if norm == "layer" else rms_norm(dim)
         self.head = linear(dim, vocab_size)
 
     def __call__(self, ids):
         T = len(ids[0])
-        if self.positions == "learned":
-            pos = self.pos(tensor(list(range(T))))
-        else:
-            pos = sinusoidal_positions(T, self.dim)
+        x = self.tok(tensor(ids))
         # (B, T, dim) + (T, dim): every sequence in the batch gets the same positions
-        x = self.tok(tensor(ids)) + pos
+        if self.positions == "learned":
+            x = x + self.pos(tensor(list(range(T))))
+        elif self.positions == "sinusoidal":
+            x = x + sinusoidal_positions(T, self.dim)
         for block in self.blocks:
             x = block(x, causal=True)
         return self.head(self.ln(x))
@@ -115,7 +121,7 @@ split = int(0.9 * len(data))
 train_data, val_data = data[:split], data[split:]
 print(f"{len(text)} characters, {len(chars)} different ones, {len(val_data)} held out\n")
 
-model = char_gpt(len(chars), CONTEXT, DIM, HEADS, LAYERS, POSITIONS)
+model = char_gpt(len(chars), CONTEXT, DIM, HEADS, LAYERS, POSITIONS, NORM, MLP)
 optimizer = AdamW(model.parameters(), lr=0.01, weight_decay=0.01)
 # there are no epochs here, so the schedule steps once per training step
 if WARMUP:
@@ -147,6 +153,6 @@ print("\n" + "".join(chars[i] for i in generate(model, prompt, 300)))
 # save the weights, load them into a new model, and check it gives the same answers
 os.makedirs(os.path.dirname(WEIGHTS_PATH), exist_ok=True)
 model.save(WEIGHTS_PATH)
-restored = char_gpt(len(chars), CONTEXT, DIM, HEADS, LAYERS, POSITIONS)
+restored = char_gpt(len(chars), CONTEXT, DIM, HEADS, LAYERS, POSITIONS, NORM, MLP)
 restored.load(WEIGHTS_PATH)
 print(f"\nsaved to {os.path.relpath(WEIGHTS_PATH, HERE)}, reloaded model val loss {evaluate(restored, val_batches):.3f}")
