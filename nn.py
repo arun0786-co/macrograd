@@ -718,24 +718,41 @@ class transformer_block(module):
     # the input, so many blocks can be stacked and still train. layer norm comes before
     # each sub-layer (pre-norm, as in GPT-2), so the residual path itself is never
     # normalized. the output has the same shape as x, ready for the next block.
+    # norm="rms", mlp="swiglu" and rope=True swap in rms_norm, the swiglu feed-forward
+    # (hidden 8 * dim // 3 by default) and rotary positions in attention. with all three it's
+    # the block LLaMA uses (Touvron et al., 2023), except that LLaMA's layers have no biases.
     # built from existing layers, so backward comes from their ops
-    def __init__(self, dim, num_heads, hidden=None):
+    def __init__(self, dim, num_heads, hidden=None, norm="layer", mlp="gelu", rope=False):
         super().__init__()
-        hidden = 4 * dim if hidden is None else hidden
-        if isinstance(hidden, bool) or not isinstance(hidden, int) or hidden < 1:
+        if hidden is not None and (isinstance(hidden, bool) or not isinstance(hidden, int) or hidden < 1):
             raise ValueError(f"hidden must be an int >= 1, got {hidden!r}")
-        self.ln1 = layer_norm(dim)
-        self.attn = multi_head_attention(dim, num_heads)
-        self.ln2 = layer_norm(dim)
-        self.mlp = MLP([dim, hidden, dim], activation_fns=[lambda x: x.gelu()])
+        if norm not in ("layer", "rms"):
+            raise ValueError(f"norm must be 'layer' or 'rms', got {norm!r}")
+        if mlp not in ("gelu", "swiglu"):
+            raise ValueError(f"mlp must be 'gelu' or 'swiglu', got {mlp!r}")
+        make_norm = layer_norm if norm == "layer" else rms_norm
+        self.ln1 = make_norm(dim)
+        self.attn = multi_head_attention(dim, num_heads, rope)
+        self.ln2 = make_norm(dim)
+        if mlp == "gelu":
+            self.mlp = MLP([dim, 4 * dim if hidden is None else hidden, dim], activation_fns=[lambda x: x.gelu()])
+        else:
+            self.mlp = swiglu(dim, hidden)
 
     def __call__(self, x, causal=False):
         x = x + self.attn(self.ln1(x), causal)
         return x + self.mlp(self.ln2(x))
 
     def __repr__(self):
-        return (f"TransformerBlock(dim={self.ln1.gamma.shape[0]}, num_heads={self.attn.num_heads}, "
-                f"hidden={self.mlp.layers[0].w.shape[1]})")
+        if isinstance(self.mlp, swiglu):
+            hidden, extra = self.mlp.gate.w.shape[1], ", mlp='swiglu'"
+        else:
+            hidden, extra = self.mlp.layers[0].w.shape[1], ""
+        if isinstance(self.ln1, rms_norm):
+            extra = ", norm='rms'" + extra
+        if self.attn.rope:
+            extra += ", rope=True"
+        return f"TransformerBlock(dim={self.ln1.gamma.shape[0]}, num_heads={self.attn.num_heads}, hidden={hidden}{extra})"
 
 
 class embedding(module):
