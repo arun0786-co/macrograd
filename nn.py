@@ -1,10 +1,10 @@
 import json
 import random
 try:
-    from .engine import PI, tensor
+    from .engine import PI, tensor, concat
 except ImportError:
     # run as a script from this folder, not imported as a package
-    from engine import PI, tensor
+    from engine import PI, tensor, concat
 
 class module:
     def __init__(self):
@@ -207,7 +207,10 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     # causal=True lets position i look only at positions 0..i, for models that predict the
     # next token and must not see it: the scores for later positions get -inf added, so
     # softmax gives them weight exactly 0. position i can always see itself, so no row is
-    # left with nothing to attend to.
+    # left with nothing to attend to. there can be fewer queries than keys: then the queries
+    # are the last T_q positions, so query i is at position T_k - T_q + i and sees keys up to
+    # there. that's the case when generating with cached keys, where one new query looks at
+    # every earlier key.
     # built from matmul, transpose, softmax and +, so backward comes from those ops
     if len(q.shape) < 2 or len(k.shape) < 2 or len(v.shape) < 2:
         raise ValueError(f"attention needs q, k, v with at least 2 dims, got {q.shape}, {k.shape}, {v.shape}")
@@ -219,16 +222,17 @@ def scaled_dot_product_attention(q, k, v, causal=False):
     d = q.shape[-1]
     scores = (q @ k.transpose()) * (d ** -0.5)
     if causal:
-        T = q.shape[-2]
-        if k.shape[-2] != T:
-            raise ValueError(f"causal attention needs as many queries as keys, got {T} and {k.shape[-2]}")
-        # (T, T), broadcast over the leading dims
-        mask = tensor([[float("-inf") if j > i else 0.0 for j in range(T)] for i in range(T)])
+        T_q, T_k = q.shape[-2], k.shape[-2]
+        if T_q > T_k:
+            raise ValueError(f"causal attention needs at most as many queries as keys, got {T_q} and {T_k}")
+        # (T_q, T_k), broadcast over the leading dims
+        shift = T_k - T_q
+        mask = tensor([[float("-inf") if j > shift + i else 0.0 for j in range(T_k)] for i in range(T_q)])
         scores = scores + mask
     return scores.softmax() @ v
 
 
-def rotary_embedding(x, base=10000.0):
+def rotary_embedding(x, base=10000.0, start=0):
     # rotary position embedding (Su et al., 2021), for queries or keys of shape (..., T, d).
     # instead of adding a position vector to the input, it turns each pair of features at
     # position p by the angle p * w_i, with the same speeds w_i = 1 / base^(2i / d) as
@@ -241,16 +245,23 @@ def rotary_embedding(x, base=10000.0):
     # tokens are, and the input needs no position embedding. there is nothing to learn.
     # it's x * cos + swap(x) * sin, where swap trades the two features of every pair and the
     # signs are folded into sin, so backward comes from *, + and indexing. it turns each
-    # pair's grad back by the same angle
+    # pair's grad back by the same angle.
+    # the T rows are positions start..start + T - 1. when generating with cached keys, the
+    # new tokens start where the cache ends
     if len(x.shape) < 2:
         raise ValueError(f"rotary_embedding needs shape (..., T, d), got {x.shape}")
     T, d = x.shape[-2:]
     if d % 2:
         raise ValueError(f"rotary_embedding needs an even last dim, since features are turned in pairs, got {d}")
-    # pe[p, 2i] = sin(p w_i) and pe[p, 2i + 1] = cos(p w_i). spread each over both features of its pair
-    pe = sinusoidal_positions(T, d, base).data
-    cos = tensor([[pe[p * d + 2 * (j // 2) + 1] for j in range(d)] for p in range(T)])
-    sin = tensor([[(1.0 if j % 2 else -1.0) * pe[p * d + 2 * (j // 2)] for j in range(d)] for p in range(T)])
+    if not base > 1:
+        raise ValueError(f"base must be > 1, got {base}")
+    if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+        raise ValueError(f"start must be an int >= 0, got {start!r}")
+    # the angle of each feature, the same for both features of a pair, with sin(a) = cos(a - pi/2)
+    speeds = [base ** (-2 * (j // 2) / d) for j in range(d)]
+    positions = range(start, start + T)
+    cos = tensor([[tensor._taylor_cos(p * w) for w in speeds] for p in positions])
+    sin = tensor([[(1.0 if j % 2 else -1.0) * tensor._taylor_cos(p * w - PI / 2) for j, w in enumerate(speeds)] for p in positions])
     swap = [j + 1 if j % 2 == 0 else j - 1 for j in range(d)]
     # (..., T, d) * (T, d): every batch and head gets the same angles
     return x * cos + x[(slice(None),) * (len(x.shape) - 1) + (swap,)] * sin
@@ -658,12 +669,22 @@ class multi_head_attention(module):
         self.v_proj = linear(dim, dim)
         self.out_proj = linear(dim, dim)
 
-    def __call__(self, x, causal=False):
+    def __call__(self, x, causal=False, cache=None):
+        # cache is a dict that keeps this layer's keys and values between calls, for generating
+        # a few tokens at a time: the new keys and values are added after the cached ones and
+        # the new queries attend to all of them, so earlier tokens never go through the layer
+        # again. their outputs don't change, since with causal=True a token never sees later
+        # ones. cache["seen"] counts the positions so far, so rope turns new tokens by their
+        # real positions. cutting cache["k"] and cache["v"] down to the last n positions makes
+        # a sliding window, and "seen" keeps counting
         dim = self.q_proj.w.shape[0]
         if len(x.shape) != 3 or x.shape[2] != dim:
             raise ValueError(f"multi_head_attention expects shape (B, T, {dim}), got {x.shape}")
+        if cache is not None and not isinstance(cache, dict):
+            raise ValueError(f"cache must be a dict, got {type(cache).__name__}")
         B, T, _ = x.shape
         H = self.num_heads
+        start = 0 if cache is None else cache.get("seen", 0)
 
         def split_heads(t):
             return t.reshape(B, T, H, dim // H).transpose(1, 2)
@@ -672,7 +693,13 @@ class multi_head_attention(module):
         k = split_heads(self.k_proj(x))
         v = split_heads(self.v_proj(x))
         if self.rope:
-            q, k = rotary_embedding(q), rotary_embedding(k)
+            q, k = rotary_embedding(q, start=start), rotary_embedding(k, start=start)
+        if cache is not None:
+            if "k" in cache:
+                # (B, H, cached, head_dim) and (B, H, T, head_dim) joined along positions
+                k = concat([cache["k"], k], axis=2)
+                v = concat([cache["v"], v], axis=2)
+            cache["k"], cache["v"], cache["seen"] = k, v, start + T
         out = scaled_dot_product_attention(q, k, v, causal)
         return self.out_proj(out.transpose(1, 2).reshape(B, T, dim))
 
@@ -739,8 +766,9 @@ class transformer_block(module):
         else:
             self.mlp = swiglu(dim, hidden)
 
-    def __call__(self, x, causal=False):
-        x = x + self.attn(self.ln1(x), causal)
+    def __call__(self, x, causal=False, cache=None):
+        # cache goes to the attention, see multi_head_attention
+        x = x + self.attn(self.ln1(x), causal, cache)
         return x + self.mlp(self.ln2(x))
 
     def __repr__(self):
