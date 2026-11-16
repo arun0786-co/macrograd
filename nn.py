@@ -671,6 +671,32 @@ class multi_head_attention(module):
         return f"MultiHeadAttention(dim={self.q_proj.w.shape[0]}, num_heads={self.num_heads})"
 
 
+class swiglu(module):
+    # the feed-forward layer used in LLaMA and PaLM (Shazeer, 2020), for x of shape (..., dim):
+    #   out = down(silu(gate(x)) * up(x))
+    # gate, up and down are linear layers. up(x) is what gets passed on, and silu(gate(x))
+    # decides, feature by feature, how much of it gets through. in a gelu MLP each hidden
+    # feature can only be scaled by a function of its own value; here a second learned
+    # projection does the scaling, so the layer can multiply two features of x together.
+    # it has three weight matrices instead of two, so the default hidden size is 8 * dim / 3
+    # instead of 4 * dim, which gives about the same number of weights as the gelu MLP in
+    # transformer_block. built from linear, silu and *, so backward comes from those ops
+    def __init__(self, dim, hidden=None):
+        super().__init__()
+        hidden = 8 * dim // 3 if hidden is None else hidden
+        if isinstance(hidden, bool) or not isinstance(hidden, int) or hidden < 1:
+            raise ValueError(f"hidden must be an int >= 1, got {hidden!r}")
+        self.gate = linear(dim, hidden)
+        self.up = linear(dim, hidden)
+        self.down = linear(hidden, dim)
+
+    def __call__(self, x):
+        return self.down(self.gate(x).silu() * self.up(x))
+
+    def __repr__(self):
+        return f"SwiGLU(dim={self.gate.w.shape[0]}, hidden={self.gate.w.shape[1]})"
+
+
 class transformer_block(module):
     # one layer of a GPT-style transformer, for x of shape (B, T, dim):
     #   x = x + attn(ln1(x))    positions pass information to each other
