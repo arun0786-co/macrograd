@@ -10,7 +10,7 @@ from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, w
 from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, swiglu, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions, rotary_embedding
 from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau
-from data import batches
+from data import batches, bpe
 
 
 def close(a, b, rel=1e-9, abs_tol=1e-12):
@@ -1569,6 +1569,55 @@ def test_batches():
     assert raises(lambda: next(batches(x, labels[:9], 4)), ValueError)
     assert raises(lambda: next(batches(x, labels, 0)), ValueError)
     assert raises(lambda: next(batches(x, labels, 2.0)), ValueError)
+
+
+def test_bpe():
+    # by hand: aa is the most common pair (4 times, counting overlaps), then aa+a and ab tie
+    # at 2 and the one seen first wins, then aaa+b. after that no pair occurs twice
+    tok = bpe("aaabdaaabac", 300)
+    assert len(tok) == 259 and tok.merges == [(97, 97), (256, 97), (257, 98)]
+    assert tok.vocab[256:] == [b"aa", b"aaa", b"aaab"]
+    assert tok.encode("aaabdaaabac") == [258, 100, 258, 97, 99]
+    # merges go in the order they were learned, not longest first: aaaaa becomes aa aa a,
+    # and then aa+a joins the last two
+    assert tok.encode("aaaaa") == [256, 257]
+    assert bpe("aaabdaaabac", 257).merges == [(97, 97)] and len(bpe("abc", 400)) == 256
+
+    # decode gives back the text, including characters the training text never had
+    text = ("the cat sat on the mat. the dog sat on the log. " * 20) + "then they all sat."
+    tok = bpe(text, 300)
+    for t in [text, "", "x", "the mat", "théâtre, 日本語, emoji \U0001F600!"]:
+        assert tok.decode(tok.encode(t)) == t
+    assert tok.encode("") == [] and tok.encode("x") == [ord("x")]
+    # and the text takes far fewer tokens than bytes
+    assert len(tok.encode(text)) < len(text.encode()) / 4
+    assert all(tok.vocab[256 + k] == tok.vocab[a] + tok.vocab[b] for k, (a, b) in enumerate(tok.merges))
+
+    # encoding by earliest merge first is the same as applying every merge in order
+    random.seed(31)
+    for _ in range(20):
+        sample_text = "".join(random.choice("the cat sat on mat dog log") for _ in range(60))
+        ids = list(sample_text.encode())
+        for k, pair in enumerate(tok.merges):
+            merged, i = [], 0
+            while i < len(ids):
+                if i + 1 < len(ids) and (ids[i], ids[i + 1]) == pair:
+                    merged.append(256 + k)
+                    i += 2
+                else:
+                    merged.append(ids[i])
+                    i += 1
+            ids = merged
+        assert tok.encode(sample_text) == ids
+
+    # ids that cut a character's bytes apart decode to the replacement character
+    tok = bpe("abc", 256)
+    assert tok.encode("日") == [230, 151, 165] and tok.decode([230, 151]) == "\ufffd"
+
+    for bad in [255, 0, 300.0, True]:
+        assert raises_with(lambda: bpe("abc", bad), ValueError, "vocab_size")
+    for bad in [[256], [-1], [1.0], [True]]:
+        assert raises_with(lambda: tok.decode(bad), ValueError, "not an id")
 
 
 def test_save_and_load():
