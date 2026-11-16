@@ -9,7 +9,7 @@ import weakref
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, swiglu, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions, rotary_embedding
-from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup
+from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau
 from data import batches
 
 
@@ -1478,6 +1478,58 @@ def test_linear_warmup():
     assert raises(lambda: LinearWarmup(opt, True), ValueError)
     assert raises(lambda: LinearWarmup(opt, 3, after=StepLR(other, step_size=2)), ValueError)
     assert raises(lambda: LinearWarmup(opt, 3, after=lambda epoch: 0.1), ValueError)
+
+
+def test_reduce_lr_on_plateau():
+    def lrs(values, **kwargs):
+        opt = SGD([tensor([0.0])], lr=1.0)
+        schedule = ReduceLROnPlateau(opt, **kwargs)
+        out = []
+        for v in values:
+            schedule.step(v)
+            out.append(opt.lr)
+        return out
+
+    # patience 2: two epochs without a better value are allowed, the third halves the lr,
+    # and the count starts over
+    values = [5, 4, 4, 4.5, 4, 3, 3, 3, 3, 3]
+    assert lrs(values, factor=0.5, patience=2, threshold=0.0) == [1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5, 0.25, 0.25]
+    # with patience 0 every epoch that isn't better drops it. the first value is always the
+    # best so far, even with threshold 0
+    assert lrs([3, 2, 2, 5, 1], factor=0.5, patience=0, threshold=0.0) == [1, 1, 0.5, 0.25, 0.25]
+    assert lrs([3], patience=0) == [1.0]
+
+    # threshold 0.1: after 10, only values below 9 count as better
+    assert lrs([10, 9.5, 9.2], factor=0.5, patience=1, threshold=0.1) == [1, 1, 0.5]
+    assert lrs([10, 9.5, 8.9, 8.5], factor=0.5, patience=1, threshold=0.1) == [1, 1, 1, 1]
+    # with a negative best it still has to go down: after -10, only values below -11 count
+    assert lrs([-10, -9.5, -10.5], factor=0.5, patience=1, threshold=0.1) == [1, 1, 0.5]
+    assert lrs([-10, -11.5], factor=0.5, patience=0, threshold=0.1) == [1, 1]
+
+    # never below min_lr, and the default factor is 0.1
+    assert lrs([1] * 7, patience=1, min_lr=0.005) == [1, 1, 0.1, 0.1, 0.1 * 0.1, 0.1 * 0.1, 0.005]
+
+    # SGD on |w| with lr 1: every step has size 1, so w bounces between 0.3 and -0.7 and
+    # the loss never gets better. dropping the lr each time it stalls lets w settle near 0
+    def run(use_schedule):
+        w = tensor([0.3])
+        opt = SGD([w], lr=1.0)
+        schedule = ReduceLROnPlateau(opt, factor=0.5, patience=2) if use_schedule else None
+        for _ in range(60):
+            loss = (w * w + 1e-12) ** 0.5
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            if schedule:
+                schedule.step(abs(w.data[0]))
+        return abs(w.data[0])
+    assert close(run(False), 0.3) and run(True) < 1e-4
+
+    opt = SGD([tensor([0.0])], lr=1.0)
+    for kwargs, word in [({"factor": 1.0}, "factor"), ({"factor": 0.0}, "factor"), ({"patience": -1}, "patience"),
+                         ({"patience": 1.5}, "patience"), ({"patience": True}, "patience"),
+                         ({"threshold": -0.1}, "threshold"), ({"min_lr": -1.0}, "min_lr")]:
+        assert raises_with(lambda: ReduceLROnPlateau(opt, **kwargs), ValueError, word)
 
 
 def test_batches():

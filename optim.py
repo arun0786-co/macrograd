@@ -238,3 +238,46 @@ class LinearWarmup(lr_scheduler):
         if self.after is None:
             return self.base_lr
         return self.after.lr_at(epoch - self.warmup_steps)
+
+
+class ReduceLROnPlateau:
+    # lowers the lr when a number you're watching, usually the val loss, stops going down.
+    # call step(val_loss) once per epoch. a value counts as better if it beats the best so
+    # far by more than threshold times the best's size:
+    #   better = value < best - threshold * |best|
+    # after more than `patience` epochs in a row that aren't better, the lr is multiplied
+    # by factor (but not below min_lr) and the count starts over. with patience = 2 the
+    # first 2 epochs without a better value are allowed, and the lr drops after the 3rd.
+    # useful when you don't know beforehand how long training will take: the lr stays high
+    # while it helps and drops once the loss stops falling, instead of on a fixed schedule.
+    # pytorch compares with best * (1 - threshold), which for a negative best lets a worse
+    # value count as better; |best| avoids that.
+    # it isn't an lr_scheduler subclass: it has no lr for a given epoch, it reacts to values
+    def __init__(self, optimizer, factor=0.1, patience=10, threshold=1e-4, min_lr=0.0):
+        if not 0 < factor < 1:
+            raise ValueError(f"factor must be in (0, 1), got {factor}")
+        if isinstance(patience, bool) or not isinstance(patience, int) or patience < 0:
+            raise ValueError(f"patience must be an int >= 0, got {patience!r}")
+        if threshold < 0:
+            raise ValueError(f"threshold must be >= 0, got {threshold}")
+        if min_lr < 0:
+            raise ValueError(f"min_lr must be >= 0, got {min_lr}")
+        self.optimizer = optimizer
+        self.factor = factor
+        self.patience = patience
+        self.threshold = threshold
+        self.min_lr = min_lr
+        # None until the first value comes in. starting at inf wouldn't work: inf - threshold * inf
+        # is inf - inf = nan, and nothing is smaller than nan
+        self.best = None
+        self.bad_epochs = 0
+
+    def step(self, value):
+        if self.best is None or value < self.best - self.threshold * abs(self.best):
+            self.best = value
+            self.bad_epochs = 0
+        else:
+            self.bad_epochs += 1
+        if self.bad_epochs > self.patience:
+            self.optimizer.lr = max(self.optimizer.lr * self.factor, self.min_lr)
+            self.bad_epochs = 0
