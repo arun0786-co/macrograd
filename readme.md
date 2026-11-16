@@ -93,6 +93,23 @@ The run with the other seed did write names and short lines, so one 300-characte
 
 The defaults stay as they were: none of the differences is clearly bigger than the gap between seeds, and the GPT numbers above, including the LSTM comparison, came from the defaults. All eight runs went at once, so each took about 43 minutes instead of 13.
 
+`POSITIONS = "rope"`, `NORM = "rms"` and `MLP = "swiglu"` make the model LLaMA-style: rotary positions inside attention instead of a position embedding, `rms_norm` instead of layer norm, and the `swiglu` feed-forward instead of the gelu MLP. Each was tried on its own and all three together, with both seeds, and scored on the same 400 held-out batches:
+
+| Setting | Parameters | Held-out loss (first / second seed) | Next-character accuracy (first / second seed) |
+|---|---|---|---|
+| Defaults | 17,505 | 2.196 / 2.182 | 35.9% / 36.2% |
+| `POSITIONS = "rope"` | 16,993 | 2.126 / 2.110 | 37.9% / 38.0% |
+| `MLP = "swiglu"` | 17,515 | 2.166 / 2.157 | 36.8% / 36.8% |
+| `NORM = "rms"` | 17,409 | 2.204 / 2.185 | 35.8% / 35.9% |
+| All three | 16,907 | 2.112 / 2.120 | 38.3% / 38.1% |
+
+- Rotary positions made the biggest difference: 0.07 better on both seeds, five times the gap between the two default runs, and about 2 points more characters right. The sinusoidal table above also has nothing to learn and didn't help, so it isn't only about having fewer weights. What rope changes is that the distance between two characters goes straight into their attention score.
+- Swiglu was 0.025 to 0.030 better, with 10 more weights.
+- Rms norm came out about the same as layer norm, 0.008 and 0.003 behind. It was proposed as a cheaper layer norm that does about as well (Zhang and Sennrich, 2019).
+- All three together were 0.084 and 0.062 better than the defaults, but about the same as rope alone: 0.014 better on one seed and 0.010 worse on the other. Swiglu's gain didn't add on top of rope's here.
+
+On the 16 held-out batches the script prints, the LLaMA-style model gets 2.109 and 2.096, level with the LSTM's 2.116 and 2.098. The defaults stay as they were, so the numbers further up still hold. Eight runs went at once and each took about 40 minutes.
+
 The datasets download into `datasets/` on the first run, and the saved weights go in `checkpoints/`.
 
 ## What's in it
