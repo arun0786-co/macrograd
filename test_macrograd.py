@@ -2577,12 +2577,26 @@ def ref_project(layer, rows):
              for j in range(layer.w.shape[1])] for r in rows]
 
 
+def ref_rope(rows, head_dim):
+    # turns each head's pairs of features at position t by t / 10000^(2i / head_dim)
+    out = []
+    for t, r in enumerate(rows):
+        row = []
+        for j in range(0, len(r), 2):
+            a = t / 10000 ** ((j % head_dim) / head_dim)
+            row += [r[j] * math.cos(a) - r[j + 1] * math.sin(a), r[j] * math.sin(a) + r[j + 1] * math.cos(a)]
+        out.append(row)
+    return out
+
+
 def ref_mha(mha, rows, causal):
     # one sequence, a list of rows: project by hand, attend in each head's slice of the
     # features, put the heads side by side and project again
     H = mha.num_heads
     head_dim = len(rows[0]) // H
     q, k, v = ref_project(mha.q_proj, rows), ref_project(mha.k_proj, rows), ref_project(mha.v_proj, rows)
+    if mha.rope:
+        q, k = ref_rope(q, head_dim), ref_rope(k, head_dim)
     heads = []
     for h in range(H):
         cut = lambda m: tensor([r[h * head_dim:(h + 1) * head_dim] for r in m])
@@ -2632,6 +2646,32 @@ def test_multi_head_attention():
     assert raises(lambda: multi_head_attention(6, num_heads=4), ValueError)
     assert raises(lambda: small(rand_shape(3, 4)), ValueError)
     assert raises(lambda: small(rand_shape(2, 3, 5)), ValueError)
+
+    # rope: queries and keys turned by position in every head, against the same reference
+    # with the turning done by hand
+    rope = multi_head_attention(8, num_heads=2, rope=True)
+    assert repr(rope) == "MultiHeadAttention(dim=8, num_heads=2, rope=True)" and repr(small) == "MultiHeadAttention(dim=4, num_heads=2)"
+    for p in rope.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+    x = rand_shape(2, 5, 8)
+    for causal in [False, True]:
+        out = rope(x, causal=causal)
+        for b in range(2):
+            rows = [[x.get_element(b, t, c) for c in range(8)] for t in range(5)]
+            expected = ref_mha(rope, rows, causal)
+            assert all(close(out.get_element(b, t, c), expected[t][c], abs_tol=1e-12) for t in range(5) for c in range(8))
+    # position 0 isn't turned, so one position on its own gives the same as without rope
+    plain = multi_head_attention(8, num_heads=2)
+    for p, q in zip(plain.parameters(), rope.parameters()):
+        p.data = q.data[:]
+    one = rand_shape(2, 1, 8)
+    assert all(close(a, b, abs_tol=1e-15) for a, b in zip(rope(one).data, plain(one).data))
+    assert not all(close(a, b) for a, b in zip(rope(x).data, plain(x).data))
+    small_rope = multi_head_attention(4, num_heads=2, rope=True)
+    for causal in [False, True]:
+        gradcheck(lambda a, *params: small_rope(a, causal).mse_loss(y), x[:, :3, :4], *small_rope.parameters())
+    assert raises_with(lambda: multi_head_attention(6, num_heads=2, rope=True), ValueError, "even")
+    assert raises_with(lambda: multi_head_attention(8, num_heads=2, rope=1), ValueError, "True or False")
 
 
 def test_swiglu():
