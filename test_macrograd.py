@@ -776,6 +776,60 @@ def test_getitem():
               + (t[:, 1:, 0].transpose() * weights[:2]).sum(), x)
 
 
+def test_gather():
+    # by hand: along axis 1 each row picks its own columns, along axis 0 each column its own row
+    a = tensor([[1.0, 5.0, 2.0], [7.0, 0.0, 3.0]])
+    g = a.gather(1, [[2, 0], [1, 1]])
+    assert g.data == [2.0, 1.0, 0.0, 0.0] and g.shape == (2, 2)
+    g = a.gather(0, [[1, 0, 0]])
+    assert g.data == [7.0, 5.0, 2.0] and g.shape == (1, 3)
+    assert a.gather(-1, [[2, 0], [1, 1]]).data == a.gather(1, [[2, 0], [1, 1]]).data
+    # whole-number floats and a tensor index work too
+    assert a.gather(1, tensor([[2.0], [0.0]])).data == [2.0, 7.0]
+    # picking at the argmax gives the max
+    assert a.gather(1, a.argmax(axis=1, keepdim=True)).data == a.max(axis=1, keepdim=True).data
+
+    # 3-d, against picking each value with get_element
+    random.seed(63)
+    x = rand_shape(2, 3, 4)
+    for axis in [0, 1, 2]:
+        shape = [2, 3, 4]
+        shape[axis] = 5
+        n = shape[0] * shape[1] * shape[2]
+        index = tensor([random.randrange(x.shape[axis]) for _ in range(n)], shape=shape)
+        g = x.gather(axis, index)
+        assert g.shape == tuple(shape)
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                for k in range(shape[2]):
+                    spot = [i, j, k]
+                    spot[axis] = index.get_element(i, j, k)
+                    assert g.get_element(i, j, k) == x.get_element(*spot)
+        # 5 picks from 4 or fewer positions, so some are picked more than once and their grads add up
+        weights = tensor([0.3 * v - 1.5 for v in range(n)], shape=shape)
+        gradcheck(lambda t: (t.gather(axis, index) * weights).sum(), x)
+        x.gather(axis, index).sum().backward()
+        assert index.grad == [0.0] * n
+    gradcheck(lambda t: t.gather(1, [[[0, 2, 2, 1]], [[1, 1, 0, 0]]]).tanh().sum() + (t * t).sum(), x)
+
+    # each row's log probability of its label is what nll_loss averages
+    logits = rand_shape(4, 5)
+    labels = [3, 0, 4, 3]
+    picked = logits.log_softmax().gather(1, [[y] for y in labels])
+    assert close(-picked.mean().data[0], logits.log_softmax().nll_loss(labels).data[0])
+    gradcheck(lambda t: -t.log_softmax().gather(1, [[y] for y in labels]).mean(), logits)
+
+    assert raises_with(lambda: a.gather(1, [2, 0]), ValueError, "shaped like")
+    assert raises_with(lambda: a.gather(1, [[0], [1], [2]]), ValueError, "shaped like")
+    assert raises_with(lambda: a.gather(0, [[0, 1]]), ValueError, "shaped like")
+    assert raises_with(lambda: a.gather(1, [[3], [0]]), IndexError, "out of range")
+    assert raises_with(lambda: a.gather(1, [[-1], [0]]), IndexError, "out of range")
+    assert raises_with(lambda: a.gather(1, [[0.5], [0]]), TypeError, "whole-number")
+    assert raises_with(lambda: a.gather(1, [[True], [0]]), TypeError, "whole-number")
+    assert raises(lambda: a.gather(2, [[0], [0]]), IndexError)
+
+
+
 def test_concat():
     a = tensor([[1.0, 2.0], [3.0, 4.0]])
     b = tensor([[5.0, 6.0]])
