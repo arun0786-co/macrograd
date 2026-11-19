@@ -587,6 +587,46 @@ class tensor:
         out._backward = _backward
         return out
 
+    def gather(self, axis, index):
+        # picks values along one axis by position, a separate choice at every spot of the
+        # other axes. index has as many dims as x, the same size as x in every dim but axis,
+        # and holds positions 0..size-1 along axis. for a 2-d x:
+        #   axis=1: out[i][j] = x[i][index[i][j]]
+        #   axis=0: out[i][j] = x[index[i][j]][j]
+        # the output has index's shape. with log probabilities (B, C) and labels as a (B, 1)
+        # index, it picks each row's log probability of its label. indexing with lists picks
+        # the same positions for every row; gather lets each row pick its own.
+        # every output value is a copy of one input value, so backward adds each grad back to
+        # where it came from, twice if a position was picked twice. index gets no grad
+        if not isinstance(index, tensor):
+            index = tensor(index)
+        outer, size, inner, _ = self._reduce_layout(axis, keepdim=True)
+        axis = axis % len(self.shape)
+        if len(index.shape) != len(self.shape) or any(
+                d != axis and index.shape[d] != self.shape[d] for d in range(len(self.shape))):
+            raise ValueError(f"gather needs an index shaped like {self.shape} in every dim but {axis}, got {index.shape}")
+
+        # index and out are laid out as [outer][picks][inner], x as [outer][size][inner].
+        # src[i] is the position in x that output value i is copied from
+        picks = index.shape[axis]
+        src = []
+        for i, k in enumerate(index.data):
+            if isinstance(k, bool) or not (isinstance(k, int) or (isinstance(k, float) and k.is_integer())):
+                raise TypeError(f"gather needs whole-number positions, got {k!r}")
+            if not 0 <= k < size:
+                raise IndexError(f"gather position {k} out of range for size {size}")
+            o, r = i // (picks * inner), i % inner
+            src.append((o * size + int(k)) * inner + r)
+
+        out = tensor([self.data[j] for j in src], shape=index.shape, children=(self,), op='gather')
+
+        def _backward():
+            for i, j in enumerate(src):
+                self.grad[j] += out.grad[i]
+
+        out._backward = _backward
+        return out
+
     @staticmethod
     def _broadcast_shape(a, b):
         # line the shapes up from the right. in each position the sizes must match or one
