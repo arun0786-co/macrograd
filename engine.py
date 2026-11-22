@@ -627,6 +627,35 @@ class tensor:
         out._backward = _backward
         return out
 
+    def topk(self, k, axis=-1, largest=True):
+        # the k largest values along an axis, biggest first, and where they were.
+        # returns (values, indices), both shaped like x with axis cut down to k.
+        # largest=False gives the k smallest, smallest first. on ties the lower index
+        # comes first, like max and argmax.
+        # finding the order is plain sorting; picking the values is gather, so backward is
+        # gather's: each value's grad goes back to the input it came from and the inputs
+        # that weren't picked get 0. indices get no grad, like argmax
+        if isinstance(k, bool) or not isinstance(k, int):
+            raise TypeError(f"topk needs an int k, got {k!r}")
+        outer, size, inner, _ = self._reduce_layout(axis, keepdim=True)
+        axis = axis % len(self.shape)
+        if not 1 <= k <= size:
+            raise ValueError(f"topk needs 1 <= k <= {size}, got {k}")
+
+        # indices laid out as [outer][k][inner]. python's sort is stable, also with
+        # reverse=True, so equal values keep their order
+        indices = [0] * (outer * k * inner)
+        for o in range(outer):
+            for r in range(inner):
+                column = [self.data[(o * size + j) * inner + r] for j in range(size)]
+                order = sorted(range(size), key=lambda j: column[j], reverse=largest)
+                for t in range(k):
+                    indices[(o * k + t) * inner + r] = order[t]
+
+        shape = self.shape[:axis] + (k,) + self.shape[axis + 1:]
+        indices = tensor(indices, shape=shape)
+        return self.gather(axis, indices), indices
+
     @staticmethod
     def _broadcast_shape(a, b):
         # line the shapes up from the right. in each position the sizes must match or one
