@@ -829,6 +829,51 @@ def test_gather():
     assert raises(lambda: a.gather(2, [[0], [0]]), IndexError)
 
 
+def test_topk():
+    # by hand, with a tie: the lower index comes first
+    a = tensor([[1.0, 5.0, 2.0, 5.0], [7.0, 0.0, 3.0, -1.0]])
+    v, i = a.topk(2)
+    assert v.data == [5.0, 5.0, 7.0, 3.0] and i.data == [1, 3, 0, 2] and v.shape == i.shape == (2, 2)
+    v, i = a.topk(3, largest=False)
+    assert v.data == [1.0, 2.0, 5.0, -1.0, 0.0, 3.0] and i.data == [0, 2, 1, 3, 1, 2]
+    v, i = a.topk(1, axis=0)
+    assert v.data == [7.0, 5.0, 3.0, 5.0] and i.data == [1, 0, 1, 0] and v.shape == (1, 4)
+    # k=1 is max and argmax
+    assert a.topk(1)[0].data == a.max(axis=1, keepdim=True).data
+    assert a.topk(1)[1].data == a.argmax(axis=1, keepdim=True).data
+
+    # 3-d, every axis, against python's sorted on each column
+    random.seed(64)
+    x = rand_shape(2, 3, 4)
+    for axis in [0, 1, 2]:
+        size = x.shape[axis]
+        for k in range(1, size + 1):
+            for largest in [True, False]:
+                v, i = x.topk(k, axis=axis, largest=largest)
+                for spot in [(p, q, r) for p in range(v.shape[0]) for q in range(v.shape[1]) for r in range(v.shape[2])]:
+                    column = []
+                    for j in range(size):
+                        rest = list(spot)
+                        rest[axis] = j
+                        column.append(x.get_element(*rest))
+                    want = sorted(range(size), key=lambda j: column[j], reverse=largest)[spot[axis]]
+                    assert i.get_element(*spot) == want
+                    assert v.get_element(*spot) == column[want]
+        weights = rand_shape(*[2 if d == axis else s for d, s in enumerate(x.shape)])
+        gradcheck(lambda t: (t.topk(2, axis=axis)[0] * weights).sum(), x)
+        v, i = x.topk(2, axis=axis)
+        v.sum().backward()
+        assert i.grad == [0.0] * len(i.data)
+    assert x.topk(2, axis=-1)[1].data == x.topk(2, axis=2)[1].data
+
+    assert raises_with(lambda: a.topk(0), ValueError, "1 <= k")
+    assert raises_with(lambda: a.topk(5), ValueError, "1 <= k")
+    assert raises_with(lambda: a.topk(3, axis=0), ValueError, "1 <= k")
+    assert raises_with(lambda: a.topk(2.0), TypeError, "int k")
+    assert raises_with(lambda: a.topk(True), TypeError, "int k")
+    assert raises(lambda: a.topk(1, axis=2), IndexError)
+
+
 
 def test_concat():
     a = tensor([[1.0, 2.0], [3.0, 4.0]])
