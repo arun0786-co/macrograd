@@ -132,6 +132,7 @@ The datasets download into `datasets/` on the first run, and the saved weights g
 - `.sin()` and `.cos()` work on every value, from a Taylor series after taking the angle mod 2 pi. The grad of sin is cos and the grad of cos is -sin. The cosine lr schedule and `sinusoidal_positions` use the same series.
 - `.clamp(min, max)` limits every value to a range. Either bound can be `None`, so `.clamp(min=0)` is relu. Values that got cut off get no gradient.
 - `where(condition, a, b)` takes each value from `a` where the condition is true and from `b` elsewhere. All three broadcast, and `a` or `b` can be a number, like `where(mask, scores, float("-inf"))`. Each grad goes to the side that was picked.
+- `cosine_similarity(a, b, axis=-1, eps=1e-8)` is `sum(a * b) / max(|a| |b|, eps)` along an axis: 1 when `a` and `b` point the same way, 0 at right angles, -1 when opposite. `a` and `b` broadcast, and a zero vector gives 0.
 - `.layer_norm(eps)` moves each row to mean 0 and variance 1, as one node with a handwritten backward.
 - `.rms_norm(eps)` divides each row by its root mean square, `sqrt(mean(x^2) + eps)`. It's layer norm without subtracting the mean, as used in LLaMA.
 - `.conv2d(w, stride, padding)` slides `(O, C, KH, KW)` filters over `(N, C, H, W)` images and zero-pads the edges. `.max_pool2d(kernel_size, stride)` keeps the largest value in each window of each channel, and `.avg_pool2d(kernel_size, stride)` takes the mean of each window. A window as big as the image gives each channel's mean.

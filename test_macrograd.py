@@ -6,7 +6,7 @@ import random
 import tempfile
 import weakref
 
-from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
+from engine import tensor, concat, cosine_similarity, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, swiglu, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions, rotary_embedding
 from optim import SGD, Adagrad, RMSprop, Adam, AdamW, Lion, EMA, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau
@@ -740,6 +740,56 @@ def test_where():
 
     assert raises(lambda: where([True, False], a, b), ValueError)
     assert raises(lambda: where(cond, a, tensor([1.0, 2.0])), ValueError)
+
+
+def test_cosine_similarity():
+    def ref(u, v):
+        dot = sum(x * y for x, y in zip(u, v))
+        return dot / max(math.sqrt(sum(x * x for x in u)) * math.sqrt(sum(y * y for y in v)), 1e-8)
+
+    # same direction, right angles, opposite, and one in between
+    a = tensor([[1.0, 2.0, 3.0], [1.0, 0.0, 0.0], [1.0, -1.0, 2.0], [3.0, 4.0, 0.0]])
+    b = tensor([[2.0, 4.0, 6.0], [0.0, 5.0, 0.0], [-2.0, 2.0, -4.0], [4.0, 3.0, 0.0]])
+    out = cosine_similarity(a, b)
+    assert out.shape == (4,)
+    assert all(close(x, e) for x, e in zip(out.data, [1.0, 0.0, -1.0, 24 / 25]))
+
+    # along axis 0, and a (3,) row broadcast against every row of a (4, 3) batch
+    random.seed(68)
+    x, y = rand_tensor(4, 3), rand_tensor(4, 3)
+    cols = cosine_similarity(x, y, axis=0)
+    assert cols.shape == (3,)
+    for j in range(3):
+        assert close(cols.data[j], ref(x.data[j::3], y.data[j::3]))
+    row = tensor([0.5, -1.0, 2.0])
+    out = cosine_similarity(x, row)
+    assert out.shape == (4,)
+    for i in range(4):
+        assert close(out.data[i], ref(x.data[3 * i:3 * i + 3], row.data))
+
+    # grads, also through the broadcast row and along axis 0
+    w = tensor([0.3, -1.2, 2.0, 0.7])
+    gradcheck(lambda p, q: (cosine_similarity(p, q) * w).sum(), x, y)
+    gradcheck(lambda p, q: (cosine_similarity(p, q) * w).sum(), x, row)
+    gradcheck(lambda p, q: (cosine_similarity(p, q, axis=0) * tensor([1.0, -2.0, 0.5])).sum(), x, y)
+    # the result doesn't change when a is scaled, so its grad is at right angles to a
+    p = tensor([1.0, 2.0, -0.5])
+    cosine_similarity(p, tensor([0.3, 0.1, 0.9])).backward()
+    assert abs(sum(g * v for g, v in zip(p.grad, p.data))) < 1e-12
+
+    # zero vectors give 0, and no nan or inf in the grads
+    z, v = tensor([[0.0, 0.0], [0.0, 0.0]]), tensor([[0.0, 0.0], [1.0, 2.0]])
+    out = cosine_similarity(z, v)
+    assert out.data == [0.0, 0.0]
+    out.sum().backward()
+    assert all(math.isfinite(g) for g in z.grad + v.grad)
+    assert z.grad[:2] == [0.0, 0.0] and v.grad == [0.0, 0.0, 0.0, 0.0]
+    # tiny vectors: |a| |b| = 1e-10 is under eps, so the result is 1e-10 / 1e-8, not 1
+    tiny = tensor([1e-5, 0.0])
+    assert close(cosine_similarity(tiny, tiny).data[0], 0.01)
+
+    assert raises_with(lambda: cosine_similarity(a, b, eps=0.0), ValueError, "eps")
+    assert raises(lambda: cosine_similarity(a, tensor([1.0, 2.0])), ValueError)
 
 
 def test_getitem():
