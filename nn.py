@@ -774,8 +774,9 @@ class transformer_block(module):
     # norm="rms", mlp="swiglu" and rope=True swap in rms_norm, the swiglu feed-forward
     # (hidden 8 * dim // 3 by default) and rotary positions in attention. with all three it's
     # the block LLaMA uses (Touvron et al., 2023), except that LLaMA's layers have no biases.
-    # built from existing layers, so backward comes from their ops
-    def __init__(self, dim, num_heads, hidden=None, norm="layer", mlp="gelu", rope=False):
+    # num_kv_heads goes to the attention and makes it grouped-query attention, see
+    # multi_head_attention. built from existing layers, so backward comes from their ops
+    def __init__(self, dim, num_heads, hidden=None, norm="layer", mlp="gelu", rope=False, num_kv_heads=None):
         super().__init__()
         if hidden is not None and (isinstance(hidden, bool) or not isinstance(hidden, int) or hidden < 1):
             raise ValueError(f"hidden must be an int >= 1, got {hidden!r}")
@@ -785,7 +786,7 @@ class transformer_block(module):
             raise ValueError(f"mlp must be 'gelu' or 'swiglu', got {mlp!r}")
         make_norm = layer_norm if norm == "layer" else rms_norm
         self.ln1 = make_norm(dim)
-        self.attn = multi_head_attention(dim, num_heads, rope)
+        self.attn = multi_head_attention(dim, num_heads, rope, num_kv_heads)
         self.ln2 = make_norm(dim)
         if mlp == "gelu":
             self.mlp = MLP([dim, 4 * dim if hidden is None else hidden, dim], activation_fns=[lambda x: x.gelu()])
@@ -806,6 +807,8 @@ class transformer_block(module):
             extra = ", norm='rms'" + extra
         if self.attn.rope:
             extra += ", rope=True"
+        if self.attn.num_kv_heads != self.attn.num_heads:
+            extra += f", num_kv_heads={self.attn.num_kv_heads}"
         return f"TransformerBlock(dim={self.ln1.gamma.shape[0]}, num_heads={self.attn.num_heads}, hidden={hidden}{extra})"
 
 

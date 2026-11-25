@@ -3210,6 +3210,30 @@ def test_transformer_block():
     assert raises_with(lambda: transformer_block(4, 2, mlp="swiglu", hidden=0), ValueError, "hidden")
     assert raises_with(lambda: transformer_block(6, 2, rope=True), ValueError, "even")
 
+    # num_kv_heads: the block's attention is grouped-query, and the block is still
+    # x + attn(ln1(x)) then + mlp(ln2(.)), with that attention
+    gqa = transformer_block(8, num_heads=4, hidden=10, norm="rms", mlp="swiglu", rope=True, num_kv_heads=2)
+    assert gqa.attn.num_kv_heads == 2 and gqa.attn.num_heads == 4
+    assert gqa.attn.k_proj.w.shape == gqa.attn.v_proj.w.shape == (8, 4)
+    assert repr(gqa) == "TransformerBlock(dim=8, num_heads=4, hidden=10, norm='rms', mlp='swiglu', rope=True, num_kv_heads=2)"
+    assert repr(transformer_block(8, 4, num_kv_heads=4)) == "TransformerBlock(dim=8, num_heads=4, hidden=32)"
+    for p in gqa.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+    hand = multi_head_attention(8, 4, rope=True, num_kv_heads=2)
+    for (_, mine), (_, theirs) in zip(hand.named_parameters(), gqa.attn.named_parameters()):
+        mine.data = theirs.data[:]
+    x = rand_shape(2, 5, 8)
+    for causal in [False, True]:
+        h = x + hand(gqa.ln1(x), causal)
+        expected = h + gqa.mlp(gqa.ln2(h))
+        out = gqa(x, causal=causal)
+        assert all(close(u, v, abs_tol=1e-12) for u, v in zip(out.data, expected.data))
+    # with 1 kv head every query head shares it, and it still trains
+    mqa = transformer_block(4, num_heads=2, hidden=6, num_kv_heads=1)
+    y = rand_shape(2, 3, 4)
+    gradcheck(lambda a, *params: mqa(a, True).mse_loss(y), rand_shape(2, 3, 4), *mqa.parameters())
+    assert raises_with(lambda: transformer_block(8, 4, num_kv_heads=3), ValueError, "num_kv_heads")
+
 
 def test_kv_cache():
     random.seed(34)
@@ -3248,6 +3272,14 @@ def test_kv_cache():
             window = layer(x[:, max(0, t - 3):t + 1], causal=True)
             assert close_all(out, window[:, -1:])
         assert cache["seen"] == 7
+
+    # a grouped-query block caches only its kv heads: 2 of 4, so half the size
+    gqa = transformer_block(8, 4, norm="rms", mlp="swiglu", rope=True, num_kv_heads=2)
+    full = gqa(x, causal=True)
+    cache = {}
+    pieces = [gqa(x[:, a:b], True, cache) for a, b in [(0, 2), (2, 7)]]
+    assert close_all(concat(pieces, axis=1), full)
+    assert cache["seen"] == 7 and cache["k"].shape == cache["v"].shape == (2, 2, 7, 2)
 
     assert raises_with(lambda: layers[0](x, True, cache=[]), ValueError, "cache must be a dict")
 
