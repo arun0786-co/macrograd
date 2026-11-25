@@ -143,6 +143,39 @@ class AdamW(Adam):
         super().step()
 
 
+class Lion(optimizer):
+    # keeps a momentum like Adam but steps by its sign, so every weight moves by exactly lr
+    # each step (Chen et al., 2023, found by a program search over optimizers):
+    #   update = sign(beta1 * m + (1 - beta1) * g)
+    #   w = w * (1 - lr * weight_decay) - lr * update
+    #   m = beta2 * m + (1 - beta2) * g
+    # the step mixes in more of the new gradient (beta1 = 0.9) than the momentum it keeps
+    # for later (beta2 = 0.99), so it reacts to the latest gradient while m stays smooth.
+    # it stores one list per parameter instead of Adam's two. since every step has size lr,
+    # it needs a smaller lr than Adam, the paper suggests 3 to 10 times smaller, and a
+    # weight_decay that much bigger to keep lr * weight_decay the same. the decay is
+    # decoupled like AdamW's. a weight whose update is exactly 0 isn't moved, apart from decay
+    def __init__(self, parameters, lr=1e-4, beta1=0.9, beta2=0.99, weight_decay=0.0):
+        super().__init__(parameters, lr)
+        if not 0 <= beta1 < 1 or not 0 <= beta2 < 1:
+            raise ValueError(f"beta1 and beta2 must be in [0, 1), got {beta1} and {beta2}")
+        if weight_decay < 0:
+            raise ValueError(f"weight_decay must be >= 0, got {weight_decay}")
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.weight_decay = weight_decay
+        self.m = [[0.0] * len(p.data) for p in self.parameters]
+
+    def step(self):
+        for p, m in zip(self.parameters, self.m):
+            for i in range(len(p.data)):
+                g = p.grad[i]
+                u = self.beta1 * m[i] + (1 - self.beta1) * g
+                sign = (u > 0) - (u < 0)
+                p.data[i] = p.data[i] * (1 - self.lr * self.weight_decay) - self.lr * sign
+                m[i] = self.beta2 * m[i] + (1 - self.beta2) * g
+
+
 def clip_grad_norm(parameters, max_norm):
     # treats all the gradients as one long vector. if its length (L2 norm) is over max_norm,
     # every gradient is scaled down by the same factor so the length becomes max_norm.

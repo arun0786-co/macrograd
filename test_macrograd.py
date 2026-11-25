@@ -9,7 +9,7 @@ import weakref
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, swiglu, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions, rotary_embedding
-from optim import SGD, Adagrad, RMSprop, Adam, AdamW, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau
+from optim import SGD, Adagrad, RMSprop, Adam, AdamW, Lion, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau
 from data import batches, bpe
 
 
@@ -1403,6 +1403,66 @@ def test_rmsprop():
     assert raises(lambda: RMSprop([w], alpha=1.0), ValueError)
     assert raises(lambda: RMSprop([w], alpha=-0.1), ValueError)
     assert raises(lambda: RMSprop([w], eps=0.0), ValueError)
+
+
+def test_lion():
+    # by hand: the first step's update is sign((1 - beta1) * g), so every weight moves by
+    # exactly lr whatever the gradient's size, and a zero gradient doesn't move it
+    w = tensor([1.0, 1.0, 1.0, 1.0])
+    w.grad = [0.001, -50.0, 0.0, 3.0]
+    opt = Lion([w], lr=0.1)
+    opt.step()
+    assert w.data == [1.0 - 0.1, 1.0 + 0.1, 1.0, 1.0 - 0.1]
+    assert all(close(a, b) for a, b in zip(opt.m[0], [0.01 * g for g in [0.001, -50.0, 0.0, 3.0]]))
+
+    # several steps with weight decay against the formula written out again
+    w = tensor([0.0])
+    opt = Lion([w], lr=0.01, beta1=0.9, beta2=0.99, weight_decay=0.5)
+    ref_w, ref_m = 0.0, 0.0
+    for g in [5.0, -1.0, -1.0, -1.0, 0.2]:
+        w.grad = [g]
+        opt.step()
+        u = 0.9 * ref_m + 0.1 * g
+        ref_w = ref_w * (1 - 0.01 * 0.5) - 0.01 * (1 if u > 0 else -1 if u < 0 else 0)
+        ref_m = 0.99 * ref_m + 0.01 * g
+        assert close(w.data[0], ref_w) and close(opt.m[0][0], ref_m)
+
+    # the momentum decides when the new gradient is small: m from three gradients of +1,
+    # then a gradient of -0.1 still steps the weight down (positive update)
+    w = tensor([0.0])
+    opt = Lion([w], lr=0.01)
+    for g in [1.0, 1.0, 1.0, -0.1]:
+        w.grad = [g]
+        opt.step()
+    assert close(w.data[0], -0.04)
+
+    # with no gradient only the decay acts
+    w = tensor([2.0, -4.0])
+    opt = Lion([w], lr=0.1, weight_decay=0.5)
+    for _ in range(3):
+        opt.zero_grad()
+        opt.step()
+    assert close(w.data[0], 2.0 * 0.95 ** 3) and close(w.data[1], -4.0 * 0.95 ** 3)
+
+    # it trains: fitting y = 3x, the slope climbs exactly 0.01 a step and reaches 3 at step
+    # 300, then overshoots to about 3.8 because m (beta2 = 0.99) is slow to turn, and
+    # settles at 3 within a step of lr
+    random.seed(66)
+    xs = [random.uniform(-1, 1) for _ in range(20)]
+    x, y = tensor(xs), tensor([3.0 * v for v in xs])
+    k = tensor([0.0])
+    opt = Lion([k], lr=0.01)
+    highest = 0.0
+    for _ in range(800):
+        opt.zero_grad()
+        (x * k.expand((20,))).mse_loss(y).backward()
+        opt.step()
+        highest = max(highest, k.data[0])
+    assert highest > 3.5 and abs(k.data[0] - 3.0) <= 0.011
+
+    assert raises_with(lambda: Lion([w], beta1=1.0), ValueError, "beta1")
+    assert raises_with(lambda: Lion([w], beta2=-0.1), ValueError, "beta1")
+    assert raises_with(lambda: Lion([w], weight_decay=-1), ValueError, "weight_decay")
 
 
 def test_adamw():
