@@ -1573,6 +1573,26 @@ def where(condition, a, b):
     return out
 
 
+def cosine_similarity(a, b, axis=-1, eps=1e-8):
+    # the cosine of the angle between a and b along an axis: 1 for the same direction,
+    # 0 at right angles, -1 for opposite directions, whatever the lengths:
+    #   cos = sum(a * b) / max(|a| |b|, eps)
+    # a and b broadcast against each other, and the axis disappears from the output.
+    # it's built from ops, so backward comes from them. eps keeps a zero vector at 0
+    # instead of 0 / 0. the denominator is computed as sqrt(max(|a|^2 |b|^2, eps^2)),
+    # so the sqrt never sees 0, whose slope is infinite; where eps takes over, clamp
+    # gives the lengths no grad, as max() would
+    if eps <= 0:
+        raise ValueError(f"eps must be positive, got {eps}")
+    a = a if isinstance(a, tensor) else tensor(a)
+    b = b if isinstance(b, tensor) else tensor(b)
+    shape = tensor._broadcast_shape(a.shape, b.shape)
+    a, b = a.expand(shape), b.expand(shape)
+    dot = (a * b).sum(axis)
+    lengths2 = (a * a).sum(axis) * (b * b).sum(axis)
+    return dot / lengths2.clamp(min=eps * eps) ** 0.5
+
+
 class no_grad:
     # runs ops without recording the graph:
     #   with no_grad():
