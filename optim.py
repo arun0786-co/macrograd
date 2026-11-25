@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 try:
     from .engine import PI, tensor
 except ImportError:
@@ -174,6 +176,55 @@ class Lion(optimizer):
                 sign = (u > 0) - (u < 0)
                 p.data[i] = p.data[i] * (1 - self.lr * self.weight_decay) - self.lr * sign
                 m[i] = self.beta2 * m[i] + (1 - self.beta2) * g
+
+
+class EMA:
+    # an exponential moving average of a model's weights. after every optimizer step,
+    #   average = decay * average + (1 - decay) * w
+    # the weights at the end of training jump around with the noise of the last few batches;
+    # the average smooths that out over about 1 / (1 - decay) steps (1000 for 0.999), and
+    # often scores better on held-out data. training still updates the real weights; the
+    # average is only used to evaluate or save:
+    #   ema = EMA(model, decay=0.999)
+    #   for each batch: loss.backward(); opt.step(); ema.update()
+    #   with ema.averaged():
+    #       evaluate(model)    # the model holds the averaged weights in here
+    # the average starts as a copy of the weights when EMA is made, so early on it is pulled
+    # towards the starting weights. buffers like batch_norm's running stats aren't averaged:
+    # inside averaged() the model uses its current ones
+    def __init__(self, model, decay=0.999):
+        if not 0 <= decay < 1:
+            raise ValueError(f"decay must be in [0, 1), got {decay}")
+        self.model = model
+        self.decay = decay
+        self.average = {name: p.data[:] for name, p in model.named_parameters()}
+        self._swapped = False
+
+    def update(self):
+        d = self.decay
+        for name, p in self.model.named_parameters():
+            avg = self.average[name]
+            for i in range(len(avg)):
+                avg[i] = d * avg[i] + (1 - d) * p.data[i]
+
+    @contextmanager
+    def averaged(self):
+        # puts the averaged values into the model's own tensors and puts the trained values
+        # back afterwards, even if the body raises. the values are copied in place, so an
+        # optimizer holding those tensors keeps working
+        if self._swapped:
+            raise RuntimeError("already inside averaged()")
+        params = self.model.named_parameters()
+        trained = {name: p.data[:] for name, p in params}
+        for name, p in params:
+            p.data[:] = self.average[name]
+        self._swapped = True
+        try:
+            yield self.model
+        finally:
+            for name, p in params:
+                p.data[:] = trained[name]
+            self._swapped = False
 
 
 def clip_grad_norm(parameters, max_norm):
