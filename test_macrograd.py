@@ -2712,16 +2712,18 @@ def ref_rope(rows, head_dim):
 
 def ref_mha(mha, rows, causal):
     # one sequence, a list of rows: project by hand, attend in each head's slice of the
-    # features, put the heads side by side and project again
+    # features, put the heads side by side and project again. with fewer key and value
+    # heads, query head h uses key and value head h // G
     H = mha.num_heads
+    G = H // mha.num_kv_heads
     head_dim = len(rows[0]) // H
     q, k, v = ref_project(mha.q_proj, rows), ref_project(mha.k_proj, rows), ref_project(mha.v_proj, rows)
     if mha.rope:
         q, k = ref_rope(q, head_dim), ref_rope(k, head_dim)
     heads = []
     for h in range(H):
-        cut = lambda m: tensor([r[h * head_dim:(h + 1) * head_dim] for r in m])
-        heads.append(ref_attention(cut(q), cut(k), cut(v), causal))
+        cut = lambda m, j: tensor([r[j * head_dim:(j + 1) * head_dim] for r in m])
+        heads.append(ref_attention(cut(q, h), cut(k, h // G), cut(v, h // G), causal))
     merged = [[heads[h][t * head_dim + c] for h in range(H) for c in range(head_dim)] for t in range(len(rows))]
     return ref_project(mha.out_proj, merged)
 
@@ -2793,6 +2795,63 @@ def test_multi_head_attention():
         gradcheck(lambda a, *params: small_rope(a, causal).mse_loss(y), x[:, :3, :4], *small_rope.parameters())
     assert raises_with(lambda: multi_head_attention(6, num_heads=2, rope=True), ValueError, "even")
     assert raises_with(lambda: multi_head_attention(8, num_heads=2, rope=1), ValueError, "True or False")
+
+
+def test_grouped_query_attention():
+    random.seed(65)
+    B, T, D, H = 2, 5, 8, 4
+    x = rand_shape(B, T, D)
+    for kv, rope in [(2, False), (1, False), (2, True)]:
+        gqa = multi_head_attention(D, num_heads=H, rope=rope, num_kv_heads=kv)
+        # key and value layers only make kv heads of D // H = 2 features
+        assert gqa.q_proj.w.shape == (D, D) and gqa.k_proj.w.shape == gqa.v_proj.w.shape == (D, 2 * kv)
+        for p in gqa.parameters():
+            p.data = [random.uniform(-1, 1) for _ in p.data]
+        for causal in [False, True]:
+            out = gqa(x, causal=causal)
+            assert out.shape == (B, T, D)
+            for b in range(B):
+                rows = [[x.get_element(b, t, c) for c in range(D)] for t in range(T)]
+                expected = ref_mha(gqa, rows, causal)
+                assert all(close(out.get_element(b, t, c), expected[t][c], abs_tol=1e-12)
+                           for t in range(T) for c in range(D))
+
+    # the same as ordinary attention whose key and value weights are copied across each
+    # group: query heads 0, 1 get kv head 0, heads 2, 3 get kv head 1
+    gqa = multi_head_attention(D, num_heads=H, num_kv_heads=2)
+    full = multi_head_attention(D, num_heads=H)
+    for p in gqa.parameters():
+        p.data = [random.uniform(-1, 1) for _ in p.data]
+    full.q_proj, full.out_proj = gqa.q_proj, gqa.out_proj
+    for name in ["k_proj", "v_proj"]:
+        small, big = getattr(gqa, name), getattr(full, name)
+        src = [(h // 2) * 2 + c for h in range(H) for c in range(2)]  # column in small for each column in big
+        big.w.data = [small.w.get_element(i, src[j]) for i in range(D) for j in range(D)]
+        big.b.data = [small.b.data[src[j]] for j in range(D)]
+    for causal in [False, True]:
+        assert all(close(a, b, abs_tol=1e-12) for a, b in zip(gqa(x, causal).data, full(x, causal).data))
+    # num_kv_heads equal to num_heads is plain attention
+    same = multi_head_attention(D, num_heads=H, num_kv_heads=H)
+    assert same.k_proj.w.shape == (D, D) and repr(same) == "MultiHeadAttention(dim=8, num_heads=4)"
+    assert repr(gqa) == "MultiHeadAttention(dim=8, num_heads=4, num_kv_heads=2)"
+
+    # grads, including back through the sharing into the smaller key and value layers
+    y = rand_shape(2, 3, 8)
+    small = multi_head_attention(8, num_heads=4, rope=True, num_kv_heads=2)
+    for causal in [False, True]:
+        gradcheck(lambda a, *params: small(a, causal).mse_loss(y), rand_shape(2, 3, 8), *small.parameters())
+
+    # the cache holds only the kv heads, and feeding pieces matches one causal pass
+    cache = {}
+    pieces = [small(x[:, a:b], True, cache) for a, b in [(0, 2), (2, 3), (3, 5)]]
+    whole = small(x, causal=True)
+    assert all(close(a, b, abs_tol=1e-12) for a, b in zip(concat(pieces, axis=1).data, whole.data))
+    assert cache["k"].shape == cache["v"].shape == (2, 2, 5, 2)
+
+    assert raises_with(lambda: multi_head_attention(8, num_heads=4, num_kv_heads=3), ValueError, "divides")
+    assert raises_with(lambda: multi_head_attention(8, num_heads=4, num_kv_heads=0), ValueError, "divides")
+    assert raises_with(lambda: multi_head_attention(8, num_heads=4, num_kv_heads=8), ValueError, "divides")
+    assert raises_with(lambda: multi_head_attention(8, num_heads=4, num_kv_heads=True), ValueError, "divides")
 
 
 def test_swiglu():

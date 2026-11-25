@@ -653,8 +653,14 @@ class multi_head_attention(module):
     #   4. the heads go back side by side, (B, T, dim), and a last linear layer mixes them
     # it is self-attention: the queries, keys and values all come from the same x.
     # rope=True turns every head's queries and keys with rotary_embedding after step 2, so
-    # the scores see how far apart two positions are without any position embedding
-    def __init__(self, dim, num_heads, rope=False):
+    # the scores see how far apart two positions are without any position embedding.
+    # num_kv_heads makes it grouped-query attention (Ainslie et al., 2023): only that many
+    # key and value heads, each shared by num_heads // num_kv_heads query heads that sit
+    # next to each other (key head j serves query heads j*G .. j*G+G-1, G = the group
+    # size). the key and value layers get that much smaller, and so does a kv cache, which
+    # is what matters when generating long texts. num_kv_heads=1 is multi-query attention
+    # (Shazeer, 2019), and the default num_kv_heads=num_heads is ordinary attention
+    def __init__(self, dim, num_heads, rope=False, num_kv_heads=None):
         super().__init__()
         if num_heads < 1 or dim % num_heads != 0:
             raise ValueError(f"dim {dim} must split evenly into num_heads {num_heads}")
@@ -662,11 +668,17 @@ class multi_head_attention(module):
             raise ValueError(f"rope must be True or False, got {rope!r}")
         if rope and (dim // num_heads) % 2:
             raise ValueError(f"rope turns features in pairs, so the head size dim // num_heads must be even, got {dim // num_heads}")
+        num_kv_heads = num_heads if num_kv_heads is None else num_kv_heads
+        if isinstance(num_kv_heads, bool) or not isinstance(num_kv_heads, int) or num_kv_heads < 1 \
+                or num_heads % num_kv_heads:
+            raise ValueError(f"num_kv_heads must be an int that divides num_heads {num_heads}, got {num_kv_heads!r}")
         self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
         self.rope = rope
+        kv_dim = num_kv_heads * (dim // num_heads)
         self.q_proj = linear(dim, dim)
-        self.k_proj = linear(dim, dim)
-        self.v_proj = linear(dim, dim)
+        self.k_proj = linear(dim, kv_dim)
+        self.v_proj = linear(dim, kv_dim)
         self.out_proj = linear(dim, dim)
 
     def __call__(self, x, causal=False, cache=None):
@@ -676,22 +688,24 @@ class multi_head_attention(module):
         # again. their outputs don't change, since with causal=True a token never sees later
         # ones. cache["seen"] counts the positions so far, so rope turns new tokens by their
         # real positions. cutting cache["k"] and cache["v"] down to the last n positions makes
-        # a sliding window, and "seen" keeps counting
+        # a sliding window, and "seen" keeps counting. the cache holds num_kv_heads heads,
+        # before they're shared out to the query heads
         dim = self.q_proj.w.shape[0]
         if len(x.shape) != 3 or x.shape[2] != dim:
             raise ValueError(f"multi_head_attention expects shape (B, T, {dim}), got {x.shape}")
         if cache is not None and not isinstance(cache, dict):
             raise ValueError(f"cache must be a dict, got {type(cache).__name__}")
         B, T, _ = x.shape
-        H = self.num_heads
+        H, H_kv = self.num_heads, self.num_kv_heads
+        head_dim = dim // H
         start = 0 if cache is None else cache.get("seen", 0)
 
-        def split_heads(t):
-            return t.reshape(B, T, H, dim // H).transpose(1, 2)
+        def split_heads(t, heads):
+            return t.reshape(B, T, heads, head_dim).transpose(1, 2)
 
-        q = split_heads(self.q_proj(x))
-        k = split_heads(self.k_proj(x))
-        v = split_heads(self.v_proj(x))
+        q = split_heads(self.q_proj(x), H)
+        k = split_heads(self.k_proj(x), H_kv)
+        v = split_heads(self.v_proj(x), H_kv)
         if self.rope:
             q, k = rotary_embedding(q, start=start), rotary_embedding(k, start=start)
         if cache is not None:
@@ -700,12 +714,24 @@ class multi_head_attention(module):
                 k = concat([cache["k"], k], axis=2)
                 v = concat([cache["v"], v], axis=2)
             cache["k"], cache["v"], cache["seen"] = k, v, start + T
+        if H_kv != H:
+            # give every query head its group's key and value head:
+            # (B, H_kv, T_k, d) -> (B, H_kv, G, T_k, d) -> (B, H, T_k, d). expand copies each
+            # head G times, and its backward adds the G heads' grads back into the one head
+            G = H // H_kv
+
+            def share(t):
+                T_k = t.shape[2]
+                return t.reshape(B, H_kv, 1, T_k, head_dim).expand((B, H_kv, G, T_k, head_dim)).reshape(B, H, T_k, head_dim)
+
+            k, v = share(k), share(v)
         out = scaled_dot_product_attention(q, k, v, causal)
         return self.out_proj(out.transpose(1, 2).reshape(B, T, dim))
 
     def __repr__(self):
         rope = ", rope=True" if self.rope else ""
-        return f"MultiHeadAttention(dim={self.q_proj.w.shape[0]}, num_heads={self.num_heads}{rope})"
+        kv = f", num_kv_heads={self.num_kv_heads}" if self.num_kv_heads != self.num_heads else ""
+        return f"MultiHeadAttention(dim={self.q_proj.w.shape[0]}, num_heads={self.num_heads}{rope}{kv})"
 
 
 class swiglu(module):
