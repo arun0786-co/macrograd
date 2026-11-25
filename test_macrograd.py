@@ -9,7 +9,7 @@ import weakref
 from engine import tensor, concat, gradcheck, no_grad, is_grad_enabled, stack, where
 from nn import MLP, avg_pool2d, batch_norm, conv2d, dropout, embedding, flatten, gru_cell, layer_norm, linear, lstm_cell, max_pool2d, module, multi_head_attention, rms_norm, rnn_cell, sequential, swiglu, transformer_block
 from nn import xavier_uniform, xavier_normal, kaiming_uniform, kaiming_normal, scaled_dot_product_attention, sample, sinusoidal_positions, rotary_embedding
-from optim import SGD, Adagrad, RMSprop, Adam, AdamW, Lion, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau
+from optim import SGD, Adagrad, RMSprop, Adam, AdamW, Lion, EMA, clip_grad_norm, StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau
 from data import batches, bpe
 
 
@@ -1463,6 +1463,73 @@ def test_lion():
     assert raises_with(lambda: Lion([w], beta1=1.0), ValueError, "beta1")
     assert raises_with(lambda: Lion([w], beta2=-0.1), ValueError, "beta1")
     assert raises_with(lambda: Lion([w], weight_decay=-1), ValueError, "weight_decay")
+
+
+def test_ema():
+    # by hand with decay 0.5: the average starts at the weights, then halves the gap each update
+    layer = linear(2, 1)
+    layer.w.data, layer.b.data = [1.0, 2.0], [0.0]
+    ema = EMA(layer, decay=0.5)
+    layer.w.data[:], layer.b.data[:] = [3.0, 2.0], [4.0]
+    ema.update()
+    assert ema.average == {"w": [2.0, 2.0], "b": [2.0]}
+    layer.w.data[:], layer.b.data[:] = [3.0, 0.0], [4.0]
+    ema.update()
+    assert ema.average == {"w": [2.5, 1.0], "b": [3.0]}
+
+    # inside averaged() the model computes with the average, afterwards with the trained
+    # weights again, exactly, also when the body raises
+    x = tensor([[1.0, 1.0]])
+    with ema.averaged() as m:
+        assert m is layer and layer.w.data == [2.5, 1.0] and layer(x).data == [6.5]
+    assert layer.w.data == [3.0, 0.0] and layer.b.data == [4.0]
+    try:
+        with ema.averaged():
+            raise KeyError("stop")
+    except KeyError:
+        pass
+    assert layer.w.data == [3.0, 0.0] and layer.b.data == [4.0]
+    def nested():
+        with ema.averaged():
+            with ema.averaged():
+                pass
+    assert raises_with(nested, RuntimeError, "already")
+    assert layer.w.data == [3.0, 0.0]
+
+    # an optimizer made before still updates the same tensors
+    opt = SGD(layer.parameters(), lr=0.1)
+    with ema.averaged():
+        pass
+    layer.w.grad = [1.0, 1.0]
+    opt.step()
+    assert layer.w.data == [2.9, -0.1]
+
+    # buffers aren't averaged: the averaged model uses the current running stats
+    random.seed(67)
+    net = sequential(linear(3, 4), batch_norm(4))
+    ema = EMA(net, decay=0.9)
+    assert sorted(ema.average) == sorted(name for name, _ in net.named_parameters())
+    net(rand_shape(5, 3))
+    ema.update()
+    stats = [b.data[:] for _, b in net.named_buffers()]
+    with ema.averaged():
+        assert [b.data for _, b in net.named_buffers()] == stats
+
+    # on noisy gradients the average lands closer to the answer than the last weights:
+    # fitting k to 2 with gradient 2 (k - 2) + noise, lr 0.1, decay 0.95
+    k = tensor([0.0])
+    holder = module()
+    holder.k = k
+    opt, ema = SGD([k], lr=0.1), EMA(holder, decay=0.95)
+    rng = random.Random(5)
+    for _ in range(300):
+        k.grad = [2 * (k.data[0] - 2.0) + rng.gauss(0, 4)]
+        opt.step()
+        ema.update()
+    assert abs(ema.average["k"][0] - 2.0) < 0.5 * abs(k.data[0] - 2.0)
+
+    assert raises_with(lambda: EMA(layer, decay=1.0), ValueError, "decay")
+    assert raises_with(lambda: EMA(layer, decay=-0.1), ValueError, "decay")
 
 
 def test_adamw():
