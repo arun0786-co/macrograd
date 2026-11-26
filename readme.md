@@ -112,6 +112,22 @@ The defaults stay as they were: none of the differences is clearly bigger than t
 
 On the 16 held-out batches the script prints, the LLaMA-style model gets 2.109 and 2.096, level with the LSTM's 2.116 and 2.098. The defaults stay as they were, so the numbers further up still hold. Eight runs went at once and each took about 40 minutes.
 
+`TOKENS = "bpe"` trains on byte-pair tokens instead of characters. The tokenizer (`bpe` in `data.py`) learns `MERGES` merges from the training text, and only the tokens the training text uses get a row in the model, so no weights go to the 191 bytes Shakespeare never uses. A loss per token can't be compared with a loss per character, so the script also prints bits per character on the first 20,000 held-out characters: the total `-log2 p` of every token there, divided by the characters they spell. Windows of 16 tokens move forward by 8, and each scores only the tokens the one before it didn't, so nearly every token is guessed with at least 8 tokens before it.
+
+The LLaMA-style model (rope, rms norm, swiglu) was trained on characters and on two sizes of BPE vocabulary, each at about the same number of parameters. A bigger vocabulary needs bigger embedding and output layers, so the BPE models are narrower. A narrower model takes less time per step, so the BPE runs got more steps, to use about the same training time:
+
+| Tokens | Vocabulary | Characters per token | Width | Parameters | Steps | Training time | Bits per character (first / second seed) |
+|---|---|---|---|---|---|---|---|
+| Characters | 65 | 1 | 32 | 16,907 | 1500 | 13.3 min | 2.992 / 3.007 |
+| BPE, 132 merges | 197 | 1.71 | 24 | 16,885 | 1630 | 12.4 min | 2.991 / 2.950 |
+| BPE, 349 merges | 413 | 2.06 | 16 | 16,881 | 2010 | 13.8 min | 2.989 / 2.975 |
+
+The times are from three runs at once; the step counts came from timing 100 steps of each alone.
+
+- All three come out about the same. The best BPE run is 0.04 bits better than the characters, but the two seeds of the 132-merge model differ by 0.04 too.
+- The BPE models see more text in a window of 16 tokens, 27 and 33 characters instead of 16, and each step trains on that much more text. At this size it doesn't help much: they also have to spread fewer weights over many more tokens, and the 16-wide model has only 4 numbers per attention head.
+- The 349-merge model writes more real words ("I will have", "hold", "trust", "bear", "whence", "send"), since whole words are single tokens, but also more made-up ones built from pieces.
+
 The datasets download into `datasets/` on the first run, and the saved weights go in `checkpoints/`.
 
 ## What's in it
